@@ -4,8 +4,14 @@
 //! Shows how to edit: build ops against the version you read, apply them as
 //! one undo step, and retry if the writer typed in between. Its
 //! `plugin.toml` asks for `edit-documents`.
+//!
+//! It also curls the quotes of every compile, as a compile transform: the
+//! same ops, built against the manuscript Compile assembled and handed back
+//! instead of applied. For that it asks for `compile` and sets
+//! `compile-transform = true`.
 
-use prose_plugin::{Block, Command, Context, Document, Edit, Plugin, ui};
+use prose_plugin::compile::{CompileInfo, Note};
+use prose_plugin::{Block, Command, Compile, Context, Document, Edit, Op, Plugin, ui};
 
 #[derive(Default)]
 struct SmartQuotes;
@@ -101,7 +107,20 @@ fn curly(text: &str, start: usize, end: usize) -> Vec<(usize, &'static str)> {
     out
 }
 
-prose_plugin::export!(SmartQuotes);
+impl Compile for SmartQuotes {
+    fn transform(
+        &mut self,
+        _info: CompileInfo,
+        manuscript: Document,
+        _notes: Vec<Note>,
+    ) -> prose_plugin::Result<Vec<Op>> {
+        let mut edit = manuscript.edit();
+        build(&manuscript, &mut edit);
+        Ok(edit.ops().to_vec())
+    }
+}
+
+prose_plugin::export!(SmartQuotes, compile);
 
 #[cfg(test)]
 mod tests {

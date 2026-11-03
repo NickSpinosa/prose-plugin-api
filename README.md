@@ -22,10 +22,11 @@ Prose's own source is not here. The WIT is the whole contract between Prose and 
 | `history` | The project's drafts and revisions, a document's versions and snapshots, and a document as any of them kept it. Read only. | `read-project` |
 | `binder` | Making, retitling, moving, duplicating and trashing binder items, setting their metadata and custom fields, and replacing text across the project. Each call is one change the writer can undo from the binder; nothing empties the trash. | `edit-binder` |
 | `lint` (an export) | Check paragraphs: what the plugin finds is underlined and offered in the same menu as Prose's own spelling and grammar problems. | none |
+| `compile` (exported) | Hooks Prose calls: change the manuscript every compile makes, write a new export format, read a new import format. See [Compile and import hooks](#compile-and-import-hooks). | `compile` |
 
 Prose calls three functions the plugin exports: `activate` (register commands), `run-command`, and `on-event` (for the events the plugin's `plugin.toml` lists: document opened, saved or changed, idle, timers and so on). A plugin may export more, for what only some plugins do: the `linter` world adds the `lint` interface (below), and Prose calls it only on a plugin that exports it.
 
-Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers, decorations over text, compile and import formats, and panels.
+Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers, decorations over text, and panels.
 
 ### Permissions
 
@@ -134,8 +135,30 @@ Ranges are byte offsets into the paragraph; an empty suggestion deletes the rang
 ### Examples
 
 - [`examples/word-freq`](examples/word-freq): `:WordFreq [n]` lists the most used words in the document. Reads blocks and settings; needs no permissions.
-- [`examples/smart-quotes`](examples/smart-quotes): `:SmartQuotes` curls straight quotes in the selection or the whole document, as one undo step. Needs `edit-documents`.
+- [`examples/smart-quotes`](examples/smart-quotes): `:SmartQuotes` curls straight quotes in the selection or the whole document, as one undo step, and curls every compile's quotes as a compile transform. Needs `edit-documents` and `compile`.
 - [`examples/filter-words`](examples/filter-words): underlines filter words ("just", "really", "suddenly") and offers to cut them, leaving dialogue alone unless asked. Exports `lint`; the words are a setting.
+- [`examples/fountain`](examples/fountain): compiles the book to a [Fountain](https://fountain.io) screenplay and imports `.fountain` files, a document per top-level section. Needs `compile`.
+
+### Compile and import hooks
+
+A plugin can hook into Compile and File > Import by exporting the `compile` interface (the `compile-plugin` world) and implementing [`Compile`](crates/prose-plugin/src/compile.rs) beside `Plugin`:
+
+```rust
+impl Compile for Fountain {
+    fn export_format(&mut self, format: &str, info: CompileInfo, manuscript: Document,
+                     notes: Vec<Note>, layout: Layout) -> prose_plugin::Result<Vec<u8>> {
+        // Read manuscript.blocks() and return the file's bytes.
+    }
+}
+
+prose_plugin::export!(Fountain, compile);
+```
+
+- **`transform`** gets the whole manuscript as Compile assembled it, after the preset's replacements, as a read-only `Document`, and returns ops to apply to it (built as for an edit). It runs on every compile.
+- **`export-format`** gets the manuscript, its footnotes and the preset's layout (page, body text, paragraphs laid out apart) and returns the bytes of the file. A preset writes it with `format = "<plugin id>.<format name>"`.
+- **`import-format`** gets the bytes and name of a file the writer imports and returns the documents to add, each with a title, synopsis and blocks.
+
+None of them reach the disk: Prose reads and writes the files. Prose calls only what `plugin.toml` names (below), the plugin needs the `compile` permission, and Compile's progress and Cancel cover the calls.
 
 ## plugin.toml
 
@@ -159,6 +182,23 @@ default = 3
 min = 1                     # optional, for integer and float
 max = 20
 help = "Words shorter than this are left out."
+```
+
+A plugin with compile hooks names them:
+
+```toml
+permissions = ["compile"]
+compile-transform = true    # Prose calls `transform` on every compile
+
+[[export-format]]           # a preset writes it with format = "fountain.fountain"
+name = "fountain"           # lowercase letters, digits, - and _
+title = "Fountain screenplay"
+extension = "fountain"      # of the file compile writes
+
+[[import-format]]           # files with these extensions import through it
+name = "fountain"
+title = "Fountain screenplay"
+extensions = ["fountain"]
 ```
 
 A `choice` setting lists its `options = [...]`. `grants` and `lint` are Prose's own keys in the plugin's table, so no setting may be called that. A plugin installed in Prose is a folder holding `plugin.toml` and the built component renamed `plugin.wasm`.
@@ -189,7 +229,7 @@ A plugin can suggest keys for its commands, but the writer's `keymap.toml` alway
 
 ## Other languages
 
-Generate bindings from `wit/v0.1.0`, world `prose:plugin/plugin@0.1.0`, or `prose:plugin/linter@0.1.0` for a plugin that checks text:
+Generate bindings from `wit/v0.1.0`, world `prose:plugin/plugin@0.1.0`, or `prose:plugin/linter@0.1.0` for a plugin that checks text, or `prose:plugin/compile-plugin@0.1.0` for one with compile hooks:
 
 | Language | Tool |
 |---|---|
