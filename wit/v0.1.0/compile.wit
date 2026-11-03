@@ -4,7 +4,7 @@ package prose:plugin@0.1.0;
 /// Prose doesn't, and reading files Prose can't.
 ///
 /// A plugin offers them by exporting this interface (the `compile-plugin`
-/// world, which the Rust SDK targets for you), naming what it offers in
+/// world; in the Rust SDK, `export!(T, compile)`), naming what it offers in
 /// `plugin.toml` (`compile-transform = true`, `[[export-format]]`,
 /// `[[import-format]]`) and asking for the `compile` permission. Prose only
 /// calls what `plugin.toml` names.
