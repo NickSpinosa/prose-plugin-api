@@ -1,0 +1,18 @@
+id = "names"
+name = "Names"
+version = "0.1.0"
+api = "0.1.0"
+description = "Picks a character name from a generated list and puts it at the caret."
+authors = ["Prose"]
+license = "MIT OR Apache-2.0"
+# Writes the chosen name into the document.
+permissions = ["edit-documents"]
+events = []
+
+[settings.count]
+title = "Names to list"
+kind = "integer"
+default = 2000
+min = 10
+max = 20000
+help = "How many names :Name generates."

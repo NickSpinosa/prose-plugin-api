@@ -15,6 +15,7 @@ wasmtime::component::bindgen!({
     world: "prose:plugin/plugin@0.1.0",
     with: {
         "prose:plugin/documents.document": DocHandle,
+        "prose:plugin/ui.picker": PickerHandle,
     },
     imports: { default: trappable },
 });
@@ -67,11 +68,26 @@ pub mod compile_plugin {
 
 pub use compile_plugin::exports::prose::plugin::compile;
 pub use prose::plugin::types::{Block, BlockKind};
-pub use prose::plugin::ui::Level;
+pub use prose::plugin::ui::{Level, PickHow, PickItem, Picked};
 use prose::plugin::{commands, documents, edits, settings, types, ui, workspace};
 
 /// A handle the plugin holds on the one fake document.
 pub struct DocHandle;
+
+/// A handle on a picker the plugin opened: its index in `Prose::pickers`.
+pub struct PickerHandle(usize);
+
+/// A picker as the fake saw it.
+#[derive(Clone, Debug, Default)]
+pub struct ShownPicker {
+    pub title: String,
+    pub items: Vec<ui::PickItem>,
+    /// How many times items were added after it opened.
+    pub adds: usize,
+    /// Whether the plugin waited on it (and so the list is complete).
+    pub waited: bool,
+    pub dropped: bool,
+}
 
 /// The fake document.
 #[derive(Clone, Debug, Default)]
@@ -166,6 +182,14 @@ pub struct Prose {
     pub writer_types_once: bool,
     pub undo_steps: usize,
     pub next_id: u32,
+    /// The pickers the plugin opened, in order.
+    pub pickers: Vec<ShownPicker>,
+    /// What the writer does with the next picker waited on: an item
+    /// chosen, or `None` to dismiss it.
+    pub pick: Option<ui::Picked>,
+    /// Closes each picker once this many items are in it, as a writer
+    /// choosing before the list is done would.
+    pub close_after: Option<usize>,
     pub table: ResourceTable,
     pub wasi: WasiCtx,
 }
@@ -343,8 +367,53 @@ impl ui::Host for Prose {
     ) -> wasmtime::Result<Option<u32>> {
         Ok(Some(0))
     }
+    fn open_picker(
+        &mut self,
+        title: String,
+        items: Vec<ui::PickItem>,
+    ) -> wasmtime::Result<Resource<PickerHandle>> {
+        self.pickers.push(ShownPicker {
+            title,
+            items,
+            ..ShownPicker::default()
+        });
+        Ok(self.table.push(PickerHandle(self.pickers.len() - 1))?)
+    }
     fn log(&mut self, _level: Level, text: String) -> wasmtime::Result<()> {
         self.log.push(text);
+        Ok(())
+    }
+}
+
+impl ui::HostPicker for Prose {
+    fn add(
+        &mut self,
+        handle: Resource<PickerHandle>,
+        items: Vec<ui::PickItem>,
+    ) -> wasmtime::Result<bool> {
+        let index = self.table.get(&handle)?.0;
+        let close_after = self.close_after;
+        let picker = &mut self.pickers[index];
+        if picker.waited || close_after.is_some_and(|n| picker.items.len() >= n) {
+            return Ok(false);
+        }
+        picker.items.extend(items);
+        picker.adds += 1;
+        Ok(true)
+    }
+    fn wait(&mut self, handle: Resource<PickerHandle>) -> wasmtime::Result<Option<ui::Picked>> {
+        let index = self.table.get(&handle)?.0;
+        let picker = &mut self.pickers[index];
+        if std::mem::replace(&mut picker.waited, true) {
+            return Ok(None);
+        }
+        Ok(self
+            .pick
+            .filter(|picked| (picked.index as usize) < picker.items.len()))
+    }
+    fn drop(&mut self, handle: Resource<PickerHandle>) -> wasmtime::Result<()> {
+        let index = self.table.delete(handle)?.0;
+        self.pickers[index].dropped = true;
         Ok(())
     }
 }
