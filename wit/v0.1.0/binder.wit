@@ -1,0 +1,83 @@
+package prose:plugin@0.1.0;
+
+/// Changing the binder: making, retitling, moving, duplicating and
+/// trashing items, their metadata and custom fields, and replacing text
+/// across the project. Needs the `edit-binder` permission: without it Prose
+/// does not link this interface, so a plugin that imports it does not load.
+///
+/// Each call is one binder change that the writer can undo from the binder,
+/// as if they had made it. Items go to the trash, never away: there is no
+/// call to empty it. Changes run in order, a call returning once its
+/// change is on disk.
+interface binder {
+  use project.{item-kind, field-value, query};
+
+  /// One change to an item's metadata.
+  variant meta-change {
+    synopsis(string),
+    /// A label id from `project.labels`, or `none` to clear it.
+    label(option<string>),
+    /// A status id from `project.statuses`, or `none` to clear it.
+    status(option<string>),
+    keywords(list<string>),
+    target-words(option<u64>),
+    include-in-compile(bool),
+    /// A custom field's value, or `none` to clear it.
+    custom(custom-change),
+  }
+
+  record custom-change {
+    /// A field id from `project.fields`.
+    field: string,
+    value: option<field-value>,
+  }
+
+  /// Why a change was not made. The binder is as it was.
+  variant binder-error {
+    /// No item has this id.
+    no-such-item(string),
+    /// It can't be done; the message says why (a top-level folder can't
+    /// move, a label that isn't defined, a value that doesn't fit its
+    /// field, a document with unsaved changes the change would rewrite).
+    refused(string),
+    /// The project is read only (the trial is over) or no project is open.
+    read-only,
+    /// Another binder change (the writer's or a plugin's) is still being
+    /// written. Try again in a moment.
+    busy,
+    /// Writing to disk failed.
+    failed(string),
+  }
+
+  /// A new, empty document or folder titled `title` in folder `parent`, at
+  /// `index` among its children (at the end if `none` or past it). Returns
+  /// its id.
+  create: func(parent: string, index: option<u32>, kind: item-kind, title: string) -> result<string, binder-error>;
+
+  /// A new title, and the file or folder renamed to match.
+  retitle: func(id: string, title: string) -> result<_, binder-error>;
+
+  /// Into folder `parent` at `index` among its children without the item
+  /// (at the end if `none` or past it).
+  move: func(id: string, parent: string, index: option<u32>) -> result<_, binder-error>;
+
+  /// To the end of the trash. The writer empties it, or takes it back.
+  trash: func(id: string) -> result<_, binder-error>;
+
+  /// A copy with fresh ids just after the item. Returns the copy's id.
+  duplicate: func(id: string) -> result<string, binder-error>;
+
+  /// A copy of `template`, an item in the Templates folder, in `parent` at
+  /// `index`, titled `title` (the template's title if `none`). Returns its
+  /// id.
+  from-template: func(template: string, parent: string, index: option<u32>, title: option<string>) -> result<string, binder-error>;
+
+  /// Change an item's metadata: all of `changes` together, as one change.
+  set-meta: func(id: string, changes: list<meta-change>) -> result<_, binder-error>;
+
+  /// Replace every match of `query` with `replacement` across the project, as the
+  /// project replace does (with a regex, `replacement` expands `$1` and `${name}`), as
+  /// one change the writer undoes at once. Returns how many matches were
+  /// replaced. Refused if a document changed while it ran.
+  replace: func(query: query, replacement: string) -> result<u32, binder-error>;
+}

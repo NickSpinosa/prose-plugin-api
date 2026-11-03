@@ -51,8 +51,11 @@ pub mod bindings {
     });
 }
 
+pub mod binder;
 mod command;
 mod document;
+pub mod history;
+pub mod project;
 pub mod settings;
 pub mod ui;
 pub mod workspace;
