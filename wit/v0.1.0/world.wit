@@ -25,6 +25,7 @@ world plugin {
   import project;
   import history;
   import binder;
+  import decorations;
 
   use types.{selection, span, op};
 

@@ -1,15 +1,21 @@
 //! WordFreq: `:WordFreq [n]` lists the n most used words in the document,
-//! and `:WordFreqFix` fixes doubled words ("the the") in it.
+//! `:WordFreqMark [n]` highlights every use of them (`:WordFreqClear` takes
+//! the highlights away), and `:WordFreqFix` fixes doubled words ("the the")
+//! in it.
 //!
 //! Shows how to register commands, read a document a page of blocks at a
 //! time, read settings, show a result, and edit: `:WordFreqFix` builds its
 //! deletions against the version it read and applies them as one undo step,
 //! so `u` puts every doubled word back at once. Because it edits, its
-//! `plugin.toml` asks for `edit-documents`.
+//! `plugin.toml` asks for `edit-documents`. `:WordFreqMark` decorates the
+//! text instead, which changes nothing and needs no permission.
 
 use std::collections::HashMap;
 
-use prose_plugin::{Argument, Block, Command, Context, Document, Edit, Plugin, settings, ui};
+use prose_plugin::decorations::{Color, Decorations};
+use prose_plugin::{
+    Argument, Block, Command, Context, Document, Edit, Plugin, Position, Span, settings, ui,
+};
 
 #[derive(Default)]
 struct WordFreq;
@@ -25,6 +31,15 @@ impl Plugin for WordFreq {
             .description("Delete the second of two words repeated in a row, like \"the the\"")
             .ex_name("WordFreqFix")
             .register()?;
+        Command::new("mark_top", "Mark top words")
+            .description("Highlight every use of the most used words")
+            .ex_name("WordFreqMark")
+            .argument(Argument::Text)
+            .register()?;
+        Command::new("clear_marks", "Clear word marks")
+            .description("Take away WordFreq's highlights")
+            .ex_name("WordFreqClear")
+            .register()?;
         Ok(())
     }
 
@@ -32,6 +47,12 @@ impl Plugin for WordFreq {
         match name {
             "top_words" => top_words(args, cx),
             "fix_doubled" => fix_doubled(cx),
+            "mark_top" => mark_top(args, cx),
+            "clear_marks" => {
+                let doc = cx.document().ok_or("Open a document first")?;
+                doc.clear_decorations();
+                Ok(())
+            }
             _ => Err(format!("WordFreq has no command `{name}`")),
         }
     }
@@ -49,9 +70,20 @@ fn top_words(args: Vec<String>, cx: Context) -> prose_plugin::Result {
             .or_else(|| settings::integer("count").map(|n| n as usize))
             .unwrap_or(10),
     };
+    let top = rank(count_words(&doc), count);
+    if top.is_empty() {
+        ui::info(&format!("{} has no words to count", doc.title()));
+        return Ok(());
+    }
+    let list: Vec<String> = top.iter().map(|(w, n)| format!("{w} {n}")).collect();
+    ui::info(&format!("{}: {}", doc.title(), list.join(", ")));
+    Ok(())
+}
+
+/// How many times each word that counts is used in `doc`.
+fn count_words(doc: &Document) -> HashMap<String, u32> {
     let min_length = settings::integer("min_length").unwrap_or(3).max(1) as usize;
     let ignore = lowercase_list("ignore");
-
     let mut counts: HashMap<String, u32> = HashMap::new();
     for block in doc.blocks() {
         for (_, word) in words(&block.text) {
@@ -61,14 +93,39 @@ fn top_words(args: Vec<String>, cx: Context) -> prose_plugin::Result {
             }
         }
     }
+    counts
+}
 
-    let top = rank(counts, count);
-    if top.is_empty() {
-        ui::info(&format!("{} has no words to count", doc.title()));
-        return Ok(());
+/// Highlights every use of the `n` most used words (the argument, the vim
+/// count, or 1), with a mark in the margin of each paragraph that has one.
+fn mark_top(args: Vec<String>, cx: Context) -> prose_plugin::Result {
+    let doc = cx.document().ok_or("Open a document first")?;
+    let count = match args.first().map(|a| a.trim()).filter(|a| !a.is_empty()) {
+        Some(arg) => arg
+            .parse::<usize>()
+            .map_err(|_| format!("`{arg}` is not a number"))?,
+        None => cx.count.map_or(1, |n| n as usize),
+    };
+    let top: Vec<String> = rank(count_words(&doc), count)
+        .into_iter()
+        .map(|(word, _)| word)
+        .collect();
+    let mut marks = Decorations::new();
+    for block in doc.blocks() {
+        let mut found = false;
+        for (at, word) in words(&block.text) {
+            if top.contains(&word.to_lowercase()) {
+                let span = Span::in_block(&block.id, at as u32, (at + word.len()) as u32);
+                marks.highlight(span, Color::Yellow);
+                found = true;
+            }
+        }
+        if found {
+            marks.margin_mark(Position::new(&block.id, 0), Color::Muted, "•");
+        }
     }
-    let list: Vec<String> = top.iter().map(|(w, n)| format!("{w} {n}")).collect();
-    ui::info(&format!("{}: {}", doc.title(), list.join(", ")));
+    marks.show(&doc).map_err(|e| e.to_string())?;
+    ui::info(&format!("Marked {}", top.join(", ")));
     Ok(())
 }
 

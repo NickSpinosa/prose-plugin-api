@@ -23,10 +23,11 @@ Prose's own source is not here. The WIT is the whole contract between Prose and 
 | `binder` | Making, retitling, moving, duplicating and trashing binder items, setting their metadata and custom fields, and replacing text across the project. Each call is one change the writer can undo from the binder; nothing empties the trash. | `edit-binder` |
 | `lint` (an export) | Check paragraphs: what the plugin finds is underlined and offered in the same menu as Prose's own spelling and grammar problems. | none |
 | `compile` (exported) | Hooks Prose calls: change the manuscript every compile makes, write a new export format, read a new import format. See [Compile and import hooks](#compile-and-import-hooks). | `compile` |
+| `decorations` | Highlights, underlines (straight or wavy), marks in the margin and hints after a line, over a document's text, in the writer's theme. Each plugin replaces or clears its own set per document; they move with edits and are never saved. | none |
 
 Prose calls three functions the plugin exports: `activate` (register commands), `run-command`, and `on-event` (for the events the plugin's `plugin.toml` lists: document opened, saved or changed, idle, timers and so on). A plugin may export more, for what only some plugins do: the `linter` world adds the `lint` interface (below), and Prose calls it only on a plugin that exports it.
 
-Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers, decorations over text, and panels.
+Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers and panels.
 
 ### Permissions
 
@@ -234,9 +235,26 @@ prose_plugin::export!(NoVery, lint);
 
 Ranges are byte offsets into the paragraph; an empty suggestion deletes the range. Each call runs under the event deadline (50 ms by default). The writer turns a plugin's checks off with `lint = false` in its `[plugins.<id>]` table, or from the menu on one of its squiggles.
 
+Decorations mark up the text without changing it. Collect them and show them; each call replaces the plugin's decorations on that document:
+
+```rust
+use prose_plugin::decorations::{Color, Decorations};
+
+let mut marks = Decorations::new();
+for block in doc.blocks() {
+    for (at, _) in block.text.match_indices("suddenly") {
+        let span = Span::in_block(&block.id, at as u32, (at + 8) as u32);
+        marks.underline(span, Color::Warning, true);
+    }
+}
+marks.show(&doc).map_err(|e| e.to_string())?;
+```
+
+Like edits, they are placed against the version you read, and refused as stale if the writer typed since. They follow the writer's edits after that, and are gone when the document closes.
+
 ### Examples
 
-- [`examples/word-freq`](examples/word-freq): `:WordFreq [n]` lists the most used words in the document, and `:WordFreqFix` deletes doubled words ("the the") as one undo step, leaving the ones in its `allow_doubled` setting ("had had"). Needs `edit-documents`.
+- [`examples/word-freq`](examples/word-freq): `:WordFreq [n]` lists the most used words in the document, and `:WordFreqFix` deletes doubled words ("the the") as one undo step, leaving the ones in its `allow_doubled` setting ("had had"). `:WordFreqMark [n]` highlights every use of the top words with a mark in the margin, and `:WordFreqClear` takes the highlights away. Needs `edit-documents`.
 - [`examples/smart-quotes`](examples/smart-quotes): `:SmartQuotes` curls straight quotes in the selection or the whole document, as one undo step, and curls every compile's quotes as a compile transform. Needs `edit-documents` and `compile`.
 - [`examples/filter-words`](examples/filter-words): underlines filter words ("just", "really", "suddenly") and offers to cut them, leaving dialogue alone unless asked. Exports `lint`; the words are a setting.
 - [`examples/fountain`](examples/fountain): compiles the book to a [Fountain](https://fountain.io) screenplay and imports `.fountain` files, a document per top-level section. Needs `compile`.
