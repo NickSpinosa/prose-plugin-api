@@ -6,9 +6,9 @@ use std::sync::OnceLock;
 
 use host_test::prose::plugin::settings::Value;
 use host_test::prose::plugin::types::{Position, Selection};
-use host_test::{Doc, Grants, Level, Loaded, Prose, load};
+use host_test::{DiagnosticKind, Doc, Grants, Level, Loaded, Prose, load};
 
-/// Builds both examples once and returns the folder holding the `.wasm`s.
+/// Builds the examples once and returns the folder holding the `.wasm`s.
 fn wasm_dir() -> &'static PathBuf {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
@@ -17,7 +17,14 @@ fn wasm_dir() -> &'static PathBuf {
         let status = Command::new(env!("CARGO"))
             .current_dir(&root)
             .args(["build", "--release", "--target", "wasm32-wasip2"])
-            .args(["-p", "word-freq", "-p", "smart-quotes"])
+            .args([
+                "-p",
+                "word-freq",
+                "-p",
+                "smart-quotes",
+                "-p",
+                "filter-words",
+            ])
             .env("CARGO_TARGET_DIR", &target)
             .status()
             .expect("run cargo");
@@ -221,4 +228,34 @@ fn a_command_without_a_document_is_an_error() {
         },
     );
     assert_eq!(r.unwrap(), Err("Open a document first".into()));
+}
+
+#[test]
+fn filter_words_lints_paragraphs() {
+    let prose = Prose {
+        settings: [(
+            "words".to_string(),
+            Value::TextList(vec!["just".into(), "suddenly".into()]),
+        )]
+        .into(),
+        ..Prose::default()
+    };
+    let mut p = load(&wasm("filter_words"), Grants::default(), prose).unwrap();
+    let text = "Suddenly she just left. \u{201c}I just can\u{2019}t,\u{201d} he said.";
+    let found = p.lint(text).unwrap();
+    let flagged: Vec<&str> = found
+        .iter()
+        .map(|d| &text[d.start as usize..d.end as usize])
+        .collect();
+    assert_eq!(flagged, ["Suddenly ", "just "], "dialogue is left alone");
+    assert!(found.iter().all(|d| d.kind == DiagnosticKind::Style));
+    assert_eq!(found[1].rule, "filter_word");
+    assert_eq!(found[1].suggestions, [""]);
+    assert!(found[1].message.contains("just"));
+}
+
+#[test]
+fn a_plugin_without_the_export_has_no_lint() {
+    let p = load(&wasm("word_freq"), Grants::default(), Prose::default()).unwrap();
+    assert!(p.lint.is_none());
 }

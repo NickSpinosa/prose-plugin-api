@@ -19,6 +19,29 @@ wasmtime::component::bindgen!({
     imports: { default: trappable },
 });
 
+/// The `lint` export of the `linter` world, for plugins that check text.
+/// Its imports are the `plugin` world's, so only the export is new.
+pub mod linter {
+    wasmtime::component::bindgen!({
+        path: "../../wit/v0.1.0",
+        world: "prose:plugin/linter@0.1.0",
+        with: {
+            "prose:plugin/types": super::prose::plugin::types,
+            "prose:plugin/documents": super::prose::plugin::documents,
+            "prose:plugin/edits": super::prose::plugin::edits,
+            "prose:plugin/commands": super::prose::plugin::commands,
+            "prose:plugin/ui": super::prose::plugin::ui,
+            "prose:plugin/settings": super::prose::plugin::settings,
+            "prose:plugin/workspace": super::prose::plugin::workspace,
+            "prose:plugin/project": super::prose::plugin::project,
+            "prose:plugin/history": super::prose::plugin::history,
+            "prose:plugin/binder": super::prose::plugin::binder,
+        },
+        imports: { default: trappable },
+    });
+}
+
+pub use linter::exports::prose::plugin::lint::{Diagnostic, DiagnosticKind};
 pub use prose::plugin::types::{Block, BlockKind};
 pub use prose::plugin::ui::Level;
 use prose::plugin::{commands, documents, edits, settings, types, ui, workspace};
@@ -348,6 +371,8 @@ pub struct Grants {
 pub struct Loaded {
     pub store: Store<Prose>,
     pub plugin: Plugin,
+    /// Its `lint` export, if it has one (it targets the `linter` world).
+    pub lint: Option<linter::exports::prose::plugin::lint::Guest>,
 }
 
 /// Loads the component in `wasm`, linking only what `grants` allows, as
@@ -367,11 +392,22 @@ pub fn load(wasm: &[u8], grants: Grants, prose: Prose) -> Result<Loaded> {
         edits::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     }
     let mut store = Store::new(&engine, prose);
-    let plugin = Plugin::instantiate(&mut store, &component, &linker)?;
+    let pre = linker.instantiate_pre(&component)?;
+    let instance = pre.instantiate(&mut store)?;
+    let plugin = Plugin::new(&mut store, &instance)?;
+    // As Prose does: the export is there or it isn't, never required.
+    let lint = match linter::exports::prose::plugin::lint::GuestIndices::new(&pre) {
+        Ok(indices) => Some(indices.load(&mut store, &instance)?),
+        Err(_) => None,
+    };
     plugin
         .call_activate(&mut store)?
         .map_err(|e| wasmtime::Error::msg(format!("activate failed: {e}")))?;
-    Ok(Loaded { store, plugin })
+    Ok(Loaded {
+        store,
+        plugin,
+        lint,
+    })
 }
 
 impl Loaded {
@@ -391,6 +427,15 @@ impl Loaded {
             .call_run_command(&mut self.store, name, &args, &context);
         self.store.data_mut().in_command = false;
         result
+    }
+
+    /// Asks the plugin's `lint` export about `paragraph`.
+    pub fn lint(&mut self, paragraph: &str) -> Result<Vec<Diagnostic>> {
+        let lint = self
+            .lint
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("the plugin has no lint export"))?;
+        lint.call_lint(&mut self.store, paragraph)
     }
 
     pub fn prose(&self) -> &Prose {

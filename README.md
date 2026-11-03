@@ -1,6 +1,6 @@
 # Prose plugin API
 
-Everything you need to write a plugin for Prose, the writing app: the API, written in [WIT](https://component-model.bytecodealliance.org/design/wit.html), a Rust SDK, a project template and two example plugins.
+Everything you need to write a plugin for Prose, the writing app: the API, written in [WIT](https://component-model.bytecodealliance.org/design/wit.html), a Rust SDK, a project template and three example plugins.
 
 A Prose plugin is a WebAssembly component plus a `plugin.toml`. Because the API is WIT, a plugin can be written in any language that builds components (Rust, C, Go, JavaScript, Python, C#). This repository's SDK is for Rust; for other languages, generate bindings from [`wit/v0.1.0`](wit/v0.1.0) with your language's tool.
 
@@ -21,10 +21,11 @@ Prose's own source is not here. The WIT is the whole contract between Prose and 
 | `project` | The whole project: the binder and every item's metadata (synopsis, label, status, keywords, target, custom fields) and notes, any document's text, project search, word counts, the session's words and the words written each day. | `read-project` |
 | `history` | The project's drafts and revisions, a document's versions and snapshots, and a document as any of them kept it. Read only. | `read-project` |
 | `binder` | Making, retitling, moving, duplicating and trashing binder items, setting their metadata and custom fields, and replacing text across the project. Each call is one change the writer can undo from the binder; nothing empties the trash. | `edit-binder` |
+| `lint` (an export) | Check paragraphs: what the plugin finds is underlined and offered in the same menu as Prose's own spelling and grammar problems. | none |
 
-Prose calls three functions the plugin exports: `activate` (register commands), `run-command`, and `on-event` (for the events the plugin's `plugin.toml` lists: document opened, saved or changed, idle, timers and so on).
+Prose calls three functions the plugin exports: `activate` (register commands), `run-command`, and `on-event` (for the events the plugin's `plugin.toml` lists: document opened, saved or changed, idle, timers and so on). A plugin may export more, for what only some plugins do: the `linter` world adds the `lint` interface (below), and Prose calls it only on a plugin that exports it.
 
-Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers, decorations over text, spelling and style checks, compile and import formats, and panels.
+Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers, decorations over text, compile and import formats, and panels.
 
 ### Permissions
 
@@ -100,10 +101,41 @@ doc.edit_with_retry(|doc, edit| {
 
 Ops apply in order, each to the document as the earlier ones left it, so when you make several changes in one block, go from its end to its start.
 
+### Checking text
+
+A plugin that checks writing (filter words, adverbs, repeated words, house style) implements `Lint` too and exports it with `lint`. Prose hands it each paragraph on screen, again once typing in it pauses, and keeps the answer until the paragraph changes, so the answer should depend only on the text and the plugin's settings. What it returns is drawn with Prose's spelling or grammar squiggles and offered in the same menu, with its suggestions as the fixes:
+
+```rust
+use prose_plugin::{Context, Diagnostic, Lint, Plugin};
+
+#[derive(Default)]
+struct NoVery;
+
+impl Plugin for NoVery {
+    fn run_command(&mut self, name: &str, _: Vec<String>, _: Context) -> prose_plugin::Result {
+        Err(format!("no command {name}"))
+    }
+}
+
+impl Lint for NoVery {
+    fn lint(&mut self, paragraph: &str) -> Vec<Diagnostic> {
+        paragraph
+            .match_indices("very ")
+            .map(|(at, s)| Diagnostic::style(at, at + s.len(), "very", "Try a stronger word").suggest(""))
+            .collect()
+    }
+}
+
+prose_plugin::export!(NoVery, lint);
+```
+
+Ranges are byte offsets into the paragraph; an empty suggestion deletes the range. Each call runs under the event deadline (50 ms by default). The writer turns a plugin's checks off with `lint = false` in its `[plugins.<id>]` table, or from the menu on one of its squiggles.
+
 ### Examples
 
 - [`examples/word-freq`](examples/word-freq): `:WordFreq [n]` lists the most used words in the document. Reads blocks and settings; needs no permissions.
 - [`examples/smart-quotes`](examples/smart-quotes): `:SmartQuotes` curls straight quotes in the selection or the whole document, as one undo step. Needs `edit-documents`.
+- [`examples/filter-words`](examples/filter-words): underlines filter words ("just", "really", "suddenly") and offers to cut them, leaving dialogue alone unless asked. Exports `lint`; the words are a setting.
 
 ## plugin.toml
 
@@ -129,7 +161,7 @@ max = 20
 help = "Words shorter than this are left out."
 ```
 
-A `choice` setting lists its `options = [...]`. A plugin installed in Prose is a folder holding `plugin.toml` and the built component renamed `plugin.wasm`.
+A `choice` setting lists its `options = [...]`. `grants` and `lint` are Prose's own keys in the plugin's table, so no setting may be called that. A plugin installed in Prose is a folder holding `plugin.toml` and the built component renamed `plugin.wasm`.
 
 ## Writers' settings and keys
 
@@ -141,6 +173,9 @@ enabled = ["word-freq"]
 [plugins.word-freq]
 grants = []
 min_length = 4
+
+[plugins.filter-words]
+lint = false                # its squiggles off; true or no key is on
 
 # keymap.toml
 [app]
@@ -154,7 +189,7 @@ A plugin can suggest keys for its commands, but the writer's `keymap.toml` alway
 
 ## Other languages
 
-Generate bindings from `wit/v0.1.0`, world `prose:plugin/plugin@0.1.0`:
+Generate bindings from `wit/v0.1.0`, world `prose:plugin/plugin@0.1.0`, or `prose:plugin/linter@0.1.0` for a plugin that checks text:
 
 | Language | Tool |
 |---|---|

@@ -49,12 +49,30 @@ pub mod bindings {
         bitflags_path: "::prose_plugin::__private::wit_bindgen::rt::bitflags",
         additional_derives: [PartialEq],
     });
+
+    /// The `lint` export, generated on its own so that only a plugin that
+    /// exports it with [`export!`](crate::export)`(Type, lint)` has it.
+    /// The component then targets the `linter` world.
+    pub mod lint {
+        wit_bindgen::generate!({
+            path: "../../wit/v0.1.0",
+            inline: "package prose:sdk;\nworld lint-export { export prose:plugin/lint@0.1.0; }",
+            world: "prose:sdk/lint-export",
+            pub_export_macro: true,
+            export_macro_name: "__export_lint",
+            default_bindings_module: "::prose_plugin::bindings::lint",
+            runtime_path: "::prose_plugin::__private::wit_bindgen::rt",
+            bitflags_path: "::prose_plugin::__private::wit_bindgen::rt::bitflags",
+            additional_derives: [PartialEq],
+        });
+    }
 }
 
 pub mod binder;
 mod command;
 mod document;
 pub mod history;
+mod lint;
 pub mod project;
 pub mod settings;
 pub mod ui;
@@ -67,6 +85,7 @@ pub use bindings::prose::plugin::types::{
 pub use bindings::{CompileFinished, Context, DocumentChanged, Event, SelectionChanged};
 pub use command::{Argument, Command, RegisterError};
 pub use document::{Document, Edit, EditError, InvalidOp, new_id};
+pub use lint::{Diagnostic, DiagnosticKind, Lint};
 
 /// The version of the WIT package this crate is built against. A plugin's
 /// `plugin.toml` names it as `api`.
@@ -104,9 +123,33 @@ impl Context {
 
 /// Exports a [`Plugin`] type as the component's implementation of the
 /// `plugin` world. Use it once, at the crate root.
+///
+/// A plugin that also checks paragraphs implements [`Lint`] and passes
+/// `lint` too: `prose_plugin::export!(FilterWords, lint);`.
 #[macro_export]
 macro_rules! export {
     ($plugin:ty) => {
+        $crate::__export_plugin!($plugin, {});
+    };
+    ($plugin:ty, lint) => {
+        $crate::__export_plugin!($plugin, {
+            struct __ProseLint;
+
+            impl $crate::bindings::lint::exports::prose::plugin::lint::Guest for __ProseLint {
+                fn lint(paragraph: ::std::string::String) -> ::std::vec::Vec<$crate::Diagnostic> {
+                    __PROSE_PLUGIN.with_borrow_mut(|p| $crate::Lint::lint(p, &paragraph))
+                }
+            }
+
+            $crate::bindings::lint::__export_lint!(__ProseLint);
+        });
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __export_plugin {
+    ($plugin:ty, { $($more:tt)* }) => {
         const _: () = {
             ::std::thread_local! {
                 static __PROSE_PLUGIN: ::std::cell::RefCell<$plugin> =
@@ -135,6 +178,8 @@ macro_rules! export {
             }
 
             $crate::bindings::__export_world!(__ProseGuest);
+
+            $($more)*
         };
     };
 }
