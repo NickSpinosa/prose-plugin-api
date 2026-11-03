@@ -100,3 +100,12 @@ world plugin {
   /// Handle an event the plugin subscribed to.
   export on-event: func(event: event);
 }
+
+/// A plugin that also checks paragraphs for the spelling and grammar
+/// squiggles (the `lint` interface). Everything else is as in `plugin`.
+/// Prose calls `lint` only on a component that exports it, so a plugin
+/// that doesn't check text targets `plugin` and exports nothing more.
+world linter {
+  include plugin;
+  export lint;
+}
