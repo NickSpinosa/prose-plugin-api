@@ -1,0 +1,50 @@
+package prose:plugin@0.1.0;
+
+/// Checking paragraphs, for Prose's spelling and grammar squiggles. A
+/// plugin that exports this interface (by targeting the `linter` world) is
+/// asked about each paragraph as the writer sees it, beside Prose's own
+/// spelling and grammar checks. What it finds is underlined like Harper's
+/// grammar problems and shown in the same menu, with its suggestions as the
+/// fixes, Ignore, and a way to turn the plugin's checks off.
+///
+/// Prose checks a paragraph when it comes on screen and again once typing
+/// in it pauses, and keeps the answer until the paragraph changes. So
+/// `lint` should depend only on the text and the plugin's settings: Prose
+/// asks again for every paragraph when the plugin's settings change.
+///
+/// Each call runs under the event deadline (50 ms by default). A plugin
+/// that is slow only delays its own squiggles, never Prose's.
+interface lint {
+  /// How a diagnostic is underlined.
+  enum diagnostic-kind {
+    /// A misspelling, underlined like one.
+    spelling,
+    /// A grammar mistake, underlined like Harper's.
+    grammar,
+    /// A matter of style (a filter word, an adverb, a repeated word),
+    /// underlined like a grammar problem.
+    style,
+  }
+
+  /// Something wrong with part of a paragraph.
+  record diagnostic {
+    /// Its byte range in the paragraph's UTF-8 text. Must fall on character
+    /// boundaries; a diagnostic outside the text is dropped.
+    start: u32,
+    end: u32,
+    /// What is wrong, in a sentence, e.g. "\"Just\" is a filter word."
+    message: string,
+    /// Text to put in place of the range, best first. An empty one deletes
+    /// it; Prose offers it as "Delete ...".
+    suggestions: list<string>,
+    kind: diagnostic-kind,
+    /// The check that found it, in lowercase words joined with `_`, e.g.
+    /// `filter_word`. Ignoring a diagnostic ignores this rule on exactly this
+    /// text for the rest of the session.
+    rule: string,
+  }
+
+  /// Check one paragraph (a block's text, with no line breaks) and return
+  /// what is wrong with it, in any order.
+  lint: func(paragraph: string) -> list<diagnostic>;
+}

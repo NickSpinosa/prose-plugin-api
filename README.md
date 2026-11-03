@@ -1,12 +1,12 @@
 # Prose plugin API
 
-Everything you need to write a plugin for Prose, the writing app: the API, written in [WIT](https://component-model.bytecodealliance.org/design/wit.html), a Rust SDK, a project template and two example plugins.
+Everything you need to write a plugin for Prose, the writing app: the API, written in [WIT](https://component-model.bytecodealliance.org/design/wit.html), a Rust SDK, a project template and three example plugins.
 
 A Prose plugin is a WebAssembly component plus a `plugin.toml`. Because the API is WIT, a plugin can be written in any language that builds components (Rust, C, Go, JavaScript, Python, C#). This repository's SDK is for Rust; for other languages, generate bindings from [`wit/v0.1.0`](wit/v0.1.0) with your language's tool.
 
 Prose's own source is not here. The WIT is the whole contract between Prose and a plugin.
 
-> **Status:** API `0.1.0` is a draft. Prose doesn't load plugins yet; it will change until the first Prose release with plugin support, when it is tagged `v0.1.0` and frozen.
+> **Status:** API `0.1.0` is a draft. Prose's development builds load plugins; the API may still change until the first Prose release with plugin support, when it is tagged `v0.1.0` and frozen.
 
 ## What a plugin can do (0.1)
 
@@ -18,19 +18,28 @@ Prose's own source is not here. The WIT is the whole contract between Prose and 
 | `ui` | Status messages, notifications with buttons, text and choice prompts, a log. | none |
 | `settings` | The plugin's own `[plugins.<id>]` table from the writer's `settings.toml`. | none |
 | `workspace` | The open project's name, the documents open in panes and the active one, and opening a document in a pane or a split. | none |
+| `project` | The whole project: the binder and every item's metadata (synopsis, label, status, keywords, target, custom fields) and notes, any document's text, project search, word counts, the session's words and the words written each day. | `read-project` |
+| `history` | The project's drafts and revisions, a document's versions and snapshots, and a document as any of them kept it. Read only. | `read-project` |
+| `binder` | Making, retitling, moving, duplicating and trashing binder items, setting their metadata and custom fields, and replacing text across the project. Each call is one change the writer can undo from the binder; nothing empties the trash. | `edit-binder` |
+| `lint` (an export) | Check paragraphs: what the plugin finds is underlined and offered in the same menu as Prose's own spelling and grammar problems. | none |
+| `compile` (exported) | Hooks Prose calls: change the manuscript every compile makes, write a new export format, read a new import format. See [Compile and import hooks](#compile-and-import-hooks). | `compile` |
 | `decorations` | Highlights, underlines (straight or wavy), marks in the margin and hints after a line, over a document's text, in the writer's theme. Each plugin replaces or clears its own set per document; they move with edits and are never saved. | none |
 
-Prose calls three functions the plugin exports: `activate` (register commands), `run-command`, and `on-event` (for the events the plugin's `plugin.toml` lists: document opened, saved or changed, idle, timers and so on).
+Prose calls three functions the plugin exports: `activate` (register commands), `run-command`, and `on-event` (for the events the plugin's `plugin.toml` lists: document opened, saved or changed, idle, timers and so on). A plugin may export more, for what only some plugins do: the `linter` world adds the `lint` interface (below), and Prose calls it only on a plugin that exports it.
 
-Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers, spelling and style checks, compile and import formats, panels, and reading the whole project.
+Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers and panels.
 
 ### Permissions
 
-A plugin asks for permissions in `plugin.toml`, and the writer grants them when installing it. Prose links only the interfaces a plugin was granted, so a plugin that imports `edits` without `edit-documents` doesn't load at all. A component only imports the interfaces it actually calls, so a plugin that never edits doesn't need the permission.
+A plugin asks for permissions in `plugin.toml`, and the writer grants them when installing it. Prose links only the interfaces a plugin was granted, so a plugin that imports `edits` without `edit-documents` (or `project` without `read-project`, or `binder` without `edit-binder`) doesn't load at all. No permission reaches git remotes, credentials, Prose's license, other plugins' data, `settings.toml` beyond the plugin's own table, or the shell: the API takes binder ids and revision ids, never paths. A component only imports the interfaces it actually calls, so a plugin that never edits doesn't need the permission.
 
 Plugins run in a sandbox: no files, no network, no clock beyond WASI's monotonic clock, and no other process. Prose stops a call that runs too long and turns off a plugin that keeps failing.
 
-## Write a plugin in Rust
+## Writing a plugin
+
+This walks through a plugin from an empty folder to running it in Prose. It uses the Rust SDK; the steps after "Build it" are the same in any language.
+
+### 1. Set up
 
 You need Rust 1.90 or newer and the WebAssembly target:
 
@@ -38,16 +47,25 @@ You need Rust 1.90 or newer and the WebAssembly target:
 rustup target add wasm32-wasip2
 ```
 
-Start from the template with [cargo-generate](https://github.com/cargo-generate/cargo-generate):
+### 2. Start from the template
+
+With [cargo-generate](https://github.com/cargo-generate/cargo-generate):
 
 ```sh
 cargo install cargo-generate
 cargo generate --git https://github.com/NickSpinosa/prose-plugin-api template --name my-plugin
 cd my-plugin
-cargo build --release
 ```
 
-The template's `.cargo/config.toml` builds for `wasm32-wasip2`, so the plugin is `target/wasm32-wasip2/release/my_plugin.wasm`. To build without the template, add the SDK and make the crate a `cdylib`:
+It asks for the name writers see, the `:` name of its first command (a capital letter first, like `WordCount`) and a one-line description, and gives you:
+
+| File | What |
+|---|---|
+| `plugin.toml` | What Prose reads before it runs anything: id, name, version, permissions, events, settings ([below](#plugintoml)) |
+| `src/lib.rs` | The plugin: one command that says how many words the document has |
+| `.cargo/config.toml` | Builds for `wasm32-wasip2` |
+
+To start without the template, make a `cdylib` crate that depends on the SDK:
 
 ```toml
 [lib]
@@ -57,9 +75,9 @@ crate-type = ["cdylib"]
 prose-plugin = { git = "https://github.com/NickSpinosa/prose-plugin-api", branch = "main" }
 ```
 
-and build with `cargo build --release --target wasm32-wasip2`.
+### 3. Add commands
 
-A plugin is a type implementing `Plugin`:
+A plugin is a type implementing `Plugin`, exported with `export!`. Prose calls `activate` once when the plugin loads, where it registers its commands, and `run_command` when the writer runs one:
 
 ```rust
 use prose_plugin::{Command, Context, Plugin, ui};
@@ -83,7 +101,32 @@ impl Plugin for Hello {
 prose_plugin::export!(Hello);
 ```
 
-Edits are built against the version of the document you read. If the writer typed in between, Prose refuses the edit rather than guessing, and `Document::edit_with_retry` reads again and rebuilds it:
+A command has two names. `hello` is its id: writers bind keys to it in `keymap.toml` as `<plugin id>.hello`. `Hello` is what they type on the `:` line, and it must start with a capital letter so it never clashes with Prose's own commands. Add `.argument(Argument::Text)` for a command that takes words after it (`:WordFreq 20`), and `.suggested_keys("secondary-k secondary-w")` to offer keys, which Prose uses only when nothing else has them and the writer's `keymap.toml` always overrides. `cx.count` is the count typed before it in vim mode, if any.
+
+What `run_command` returns is what the writer sees: `Ok` shows nothing more, and `Err(text)` shows `text` as an error on the message line. Use `ui::info`, `ui::warn` and `ui::error` to say anything else, and `ui::confirm` to ask a yes-or-no question (the deadline below doesn't run while the writer thinks).
+
+### 4. Read the document
+
+`cx.document()` is the document the command was run on. `blocks()` reads it a page of blocks at a time, so a long book is never copied all at once:
+
+```rust
+let mut words = 0;
+for block in doc.blocks() {
+    words += block.text.split_whitespace().count();
+}
+```
+
+A block has an `id`, a `kind` (paragraph, heading, quote, …), its `text`, and the runs and annotations on it. Offsets are bytes into `text`; `doc.utf16_offset` and `doc.byte_offset` convert for languages that count UTF-16. `doc.selection_span()` is the selection, if there is one.
+
+### 5. Edit it
+
+Changing the text needs the `edit-documents` permission, so add it to `plugin.toml`:
+
+```toml
+permissions = ["edit-documents"]
+```
+
+Build ops against the version of the document you read, then apply them. Everything one command applies is one undo step, so `u` undoes the whole command. If the writer typed while your plugin worked, Prose refuses the edit rather than guessing; `edit_with_retry` reads again and calls your builder again:
 
 ```rust
 doc.edit_with_retry(|doc, edit| {
@@ -96,7 +139,101 @@ doc.edit_with_retry(|doc, edit| {
 .map_err(|e| e.to_string())?;
 ```
 
-Ops apply in order, each to the document as the earlier ones left it, so when you make several changes in one block, go from its end to its start.
+Ops apply in order, each to the document as the earlier ones left it, so when you make several changes in one block, go from its end to its start. An empty edit changes nothing and makes no undo step. [`examples/word-freq`](examples/word-freq)'s `:WordFreqFix` is a whole command built this way.
+
+### 6. Give it settings
+
+Declare each setting in `plugin.toml` with a kind and a default; Prose shows them on its settings screen and the writer sets them under `[plugins.<id>]` in `settings.toml`. Read them with `prose_plugin::settings`:
+
+```toml
+[settings.min_length]
+kind = "integer"
+default = 3
+min = 1
+help = "Words shorter than this are left out."
+```
+
+```rust
+let min = prose_plugin::settings::integer("min_length").unwrap_or(3);
+```
+
+Prose fills in your defaults, but keep a fallback in code: a test host may not.
+
+### 7. Build it
+
+```sh
+cargo build --release
+```
+
+The component is `target/wasm32-wasip2/release/my_plugin.wasm`. A release build of a small plugin is about 100 KB.
+
+### 8. Try it in Prose
+
+An installed plugin is a folder holding `plugin.toml` and the component renamed `plugin.wasm`. Make one and install it:
+
+```sh
+mkdir -p dist/my-plugin
+cp plugin.toml dist/my-plugin/
+cp target/wasm32-wasip2/release/my_plugin.wasm dist/my-plugin/plugin.wasm
+```
+
+then in Prose run `:PluginInstall /path/to/dist/my-plugin` (or Settings > Plugins > Install from File… with the folder zipped as `my-plugin.prose-plugin`). Prose checks the manifest and the component's imports, asks the writer for any permissions, copies the folder into `plugins/my-plugin/` beside `settings.toml`, and turns it on. Your commands are then on the `:` line, in the command palette (the Plugins menu) and in the Shortcuts settings.
+
+After a rebuild, run `:PluginInstall` again: Prose sees the new `plugin.wasm` and reloads the plugin without a restart. `:PluginDisable my-plugin` turns it off and `:PluginRemove my-plugin` deletes it.
+
+### 9. Test it without Prose
+
+Keep the logic in plain functions and unit-test them with `cargo test` on your own machine; only the calls into Prose need the component. To run the component itself, copy [`tests/host`](tests/host): a fake Prose on Wasmtime that loads a `.wasm`, gives it a document and settings, runs commands and records what it said, what it changed and how many undo steps it made. This repository's own tests (`tests/host/tests/examples.rs`) run every example that way.
+
+### 10. Know the limits
+
+Prose runs each plugin on its own thread, in a sandbox:
+
+- **Time**: a command or `activate` may run 5 s, an event or a lint call 50 ms. A call that runs longer is stopped, and the plugin is restarted (activated again).
+- **Memory**: 64 MB over all of the plugin's memories.
+- **Crashes**: a panic, a trap or an overrun is a crash; the writer sees "<name> crashed (…) and was restarted". After three, the plugin is off until Prose restarts. An `Err` from `run_command` is not a crash.
+- **Nothing else**: no files (unless granted `files`, and then only its own `data` folder), no network, no processes, no environment. Standard output and errors go to Prose's log, not the screen, so show what the writer needs with `ui`.
+
+Prose's own costs are small: loading a plugin the first time compiles it (well under 100 ms for one this size), later loads come from a compile cache (under 10 ms), and a command's round trip is under 5 ms plus your plugin's own work.
+
+### 11. Share it
+
+- **A file**: zip the folder (`plugin.toml` and `plugin.wasm`) and rename it `<id>.prose-plugin`.
+- **A git repository**: commit `plugin.toml` and the built `plugin.wasm` at the top of the repository on a release tag (`v1.0.0`). Writers install it with `:PluginInstall github.com/you/my-plugin` and update it with `:PluginUpdate`, which takes your newest release tag.
+
+Bump `version` in `plugin.toml` with every release, and keep `api` at the WIT version you built against.
+
+## More the API can do
+
+### Checking text
+
+A plugin that checks writing (filter words, adverbs, repeated words, house style) implements `Lint` too and exports it with `lint`. Prose hands it each paragraph on screen, again once typing in it pauses, and keeps the answer until the paragraph changes, so the answer should depend only on the text and the plugin's settings. What it returns is drawn with Prose's spelling or grammar squiggles and offered in the same menu, with its suggestions as the fixes:
+
+```rust
+use prose_plugin::{Context, Diagnostic, Lint, Plugin};
+
+#[derive(Default)]
+struct NoVery;
+
+impl Plugin for NoVery {
+    fn run_command(&mut self, name: &str, _: Vec<String>, _: Context) -> prose_plugin::Result {
+        Err(format!("no command {name}"))
+    }
+}
+
+impl Lint for NoVery {
+    fn lint(&mut self, paragraph: &str) -> Vec<Diagnostic> {
+        paragraph
+            .match_indices("very ")
+            .map(|(at, s)| Diagnostic::style(at, at + s.len(), "very", "Try a stronger word").suggest(""))
+            .collect()
+    }
+}
+
+prose_plugin::export!(NoVery, lint);
+```
+
+Ranges are byte offsets into the paragraph; an empty suggestion deletes the range. Each call runs under the event deadline (50 ms by default). The writer turns a plugin's checks off with `lint = false` in its `[plugins.<id>]` table, or from the menu on one of its squiggles.
 
 Decorations mark up the text without changing it. Collect them and show them; each call replaces the plugin's decorations on that document:
 
@@ -117,8 +254,31 @@ Like edits, they are placed against the version you read, and refused as stale i
 
 ### Examples
 
-- [`examples/word-freq`](examples/word-freq): `:WordFreq [n]` lists the most used words in the document, `:WordFreqMark [n]` highlights every use of them with a mark in the margin, and `:WordFreqClear` takes the highlights away. Reads blocks and settings and decorates; needs no permissions.
-- [`examples/smart-quotes`](examples/smart-quotes): `:SmartQuotes` curls straight quotes in the selection or the whole document, as one undo step. Needs `edit-documents`.
+- [`examples/word-freq`](examples/word-freq): `:WordFreq [n]` lists the most used words in the document, and `:WordFreqFix` deletes doubled words ("the the") as one undo step, leaving the ones in its `allow_doubled` setting ("had had"). `:WordFreqMark [n]` highlights every use of the top words with a mark in the margin, and `:WordFreqClear` takes the highlights away. Needs `edit-documents`.
+- [`examples/smart-quotes`](examples/smart-quotes): `:SmartQuotes` curls straight quotes in the selection or the whole document, as one undo step, and curls every compile's quotes as a compile transform. Needs `edit-documents` and `compile`.
+- [`examples/filter-words`](examples/filter-words): underlines filter words ("just", "really", "suddenly") and offers to cut them, leaving dialogue alone unless asked. Exports `lint`; the words are a setting.
+- [`examples/fountain`](examples/fountain): compiles the book to a [Fountain](https://fountain.io) screenplay and imports `.fountain` files, a document per top-level section. Needs `compile`.
+
+### Compile and import hooks
+
+A plugin can hook into Compile and File > Import by exporting the `compile` interface (the `compile-plugin` world) and implementing [`Compile`](crates/prose-plugin/src/compile.rs) beside `Plugin`:
+
+```rust
+impl Compile for Fountain {
+    fn export_format(&mut self, format: &str, info: CompileInfo, manuscript: Document,
+                     notes: Vec<Note>, layout: Layout) -> prose_plugin::Result<Vec<u8>> {
+        // Read manuscript.blocks() and return the file's bytes.
+    }
+}
+
+prose_plugin::export!(Fountain, compile);
+```
+
+- **`transform`** gets the whole manuscript as Compile assembled it, after the preset's replacements, as a read-only `Document`, and returns ops to apply to it (built as for an edit). It runs on every compile.
+- **`export-format`** gets the manuscript, its footnotes and the preset's layout (page, body text, paragraphs laid out apart) and returns the bytes of the file. A preset writes it with `format = "<plugin id>.<format name>"`.
+- **`import-format`** gets the bytes and name of a file the writer imports and returns the documents to add, each with a title, synopsis and blocks.
+
+None of them reach the disk: Prose reads and writes the files. Prose calls only what `plugin.toml` names (below), the plugin needs the `compile` permission, and Compile's progress and Cancel cover the calls.
 
 ## plugin.toml
 
@@ -144,7 +304,24 @@ max = 20
 help = "Words shorter than this are left out."
 ```
 
-A `choice` setting lists its `options = [...]`. A plugin installed in Prose is a folder holding `plugin.toml` and the built component renamed `plugin.wasm`.
+A plugin with compile hooks names them:
+
+```toml
+permissions = ["compile"]
+compile-transform = true    # Prose calls `transform` on every compile
+
+[[export-format]]           # a preset writes it with format = "fountain.fountain"
+name = "fountain"           # lowercase letters, digits, - and _
+title = "Fountain screenplay"
+extension = "fountain"      # of the file compile writes
+
+[[import-format]]           # files with these extensions import through it
+name = "fountain"
+title = "Fountain screenplay"
+extensions = ["fountain"]
+```
+
+A `choice` setting lists its `options = [...]`. `grants` and `lint` are Prose's own keys in the plugin's table, so no setting may be called that. A plugin installed in Prose is a folder holding `plugin.toml` and the built component renamed `plugin.wasm`.
 
 ## Writers' settings and keys
 
@@ -154,8 +331,11 @@ A `choice` setting lists its `options = [...]`. A plugin installed in Prose is a
 enabled = ["word-freq"]
 
 [plugins.word-freq]
-grants = []
+grants = ["edit-documents"]
 min_length = 4
+
+[plugins.filter-words]
+lint = false                # its squiggles off; true or no key is on
 
 # keymap.toml
 [app]
@@ -169,7 +349,7 @@ A plugin can suggest keys for its commands, but the writer's `keymap.toml` alway
 
 ## Other languages
 
-Generate bindings from `wit/v0.1.0`, world `prose:plugin/plugin@0.1.0`:
+Generate bindings from `wit/v0.1.0`, world `prose:plugin/plugin@0.1.0`, or `prose:plugin/linter@0.1.0` for a plugin that checks text, or `prose:plugin/compile-plugin@0.1.0` for one with compile hooks:
 
 | Language | Tool |
 |---|---|

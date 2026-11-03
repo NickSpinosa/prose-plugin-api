@@ -6,13 +6,23 @@ pub use edits::{EditError, InvalidOp};
 /// How many blocks [`Document::blocks`] asks for at a time.
 const PAGE: u32 = 256;
 
-/// A document the plugin can read: the one a command was run on.
+/// A document the plugin can read: the one a command was run on, or with
+/// `read-project` any document ([`crate::project::open`]) or a revision's
+/// ([`crate::history::read`]).
 pub struct Document {
     raw: documents::Document,
 }
 
 pub(crate) fn current() -> Option<Document> {
-    documents::current().map(|raw| Document { raw })
+    documents::current().map(Document::from_raw)
+}
+
+impl From<documents::Document> for Document {
+    /// Wraps a handle from the generated bindings, such as the manuscript a
+    /// compile hook is given.
+    fn from(raw: documents::Document) -> Self {
+        Document { raw }
+    }
 }
 
 /// A fresh id for a block or annotation the plugin is about to create.
@@ -21,6 +31,10 @@ pub fn new_id() -> String {
 }
 
 impl Document {
+    pub(crate) fn from_raw(raw: documents::Document) -> Self {
+        Document { raw }
+    }
+
     /// The document the running command was run on. The same as
     /// [`Context::document`](crate::Context::document).
     pub fn current() -> Option<Document> {

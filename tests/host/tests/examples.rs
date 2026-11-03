@@ -4,11 +4,14 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
+use host_test::compile::Note;
 use host_test::prose::plugin::settings::Value;
-use host_test::prose::plugin::types::{Position, Selection};
-use host_test::{Doc, Grants, Level, Loaded, Prose, load};
+use host_test::prose::plugin::types::{
+    Annotation, AnnotationKind, Marks, Position, Run, Selection,
+};
+use host_test::{BlockKind, DiagnosticKind, Doc, Grants, Level, Loaded, Prose, load};
 
-/// Builds both examples once and returns the folder holding the `.wasm`s.
+/// Builds the examples once and returns the folder holding the `.wasm`s.
 fn wasm_dir() -> &'static PathBuf {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
@@ -17,7 +20,16 @@ fn wasm_dir() -> &'static PathBuf {
         let status = Command::new(env!("CARGO"))
             .current_dir(&root)
             .args(["build", "--release", "--target", "wasm32-wasip2"])
-            .args(["-p", "word-freq", "-p", "smart-quotes"])
+            .args([
+                "-p",
+                "word-freq",
+                "-p",
+                "smart-quotes",
+                "-p",
+                "filter-words",
+                "-p",
+                "fountain",
+            ])
             .env("CARGO_TARGET_DIR", &target)
             .status()
             .expect("run cargo");
@@ -51,7 +63,7 @@ fn word_freq_lists_top_words() {
         .into(),
         ..Prose::default()
     };
-    let mut p = load(&wasm("word_freq"), Grants::default(), prose).unwrap();
+    let mut p = load(&wasm("word_freq"), edits(), prose).unwrap();
 
     let cmd = &p.prose().commands[0];
     assert_eq!(cmd.name, "top_words");
@@ -69,7 +81,7 @@ fn word_freq_lists_top_words() {
 fn word_freq_reports_a_bad_argument() {
     let mut p = load(
         &wasm("word_freq"),
-        Grants::default(),
+        edits(),
         Prose {
             doc: Doc::paragraphs(&["x"]),
             ..Prose::default()
@@ -88,7 +100,7 @@ fn word_freq_pages_through_a_long_document() {
     let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
     let mut p = load(
         &wasm("word_freq"),
-        Grants::default(),
+        edits(),
         Prose {
             doc: Doc::paragraphs(&refs),
             ..Prose::default()
@@ -99,10 +111,139 @@ fn word_freq_pages_through_a_long_document() {
     assert_eq!(messages(&p), ["Chapter One: common 1000"]);
 }
 
+/// WordFreq's grant: `:WordFreqFix` edits.
+fn edits() -> Grants {
+    Grants {
+        edit_documents: true,
+    }
+}
+
 #[test]
-fn word_freq_does_not_need_edits() {
-    // It never calls `edits`, so it loads with nothing granted.
-    assert!(load(&wasm("word_freq"), Grants::default(), Prose::default()).is_ok());
+fn word_freq_needs_edit_documents() {
+    // `:WordFreqFix` calls `edits`, so the component imports it and doesn't
+    // load without the grant.
+    let err = load(&wasm("word_freq"), Grants::default(), Prose::default())
+        .err()
+        .expect("must not load without edit-documents");
+    assert!(
+        format!("{err:?}").contains("prose:plugin/edits@0.1.0"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn word_freq_fix_deletes_doubled_words_in_one_undo_step() {
+    let prose = Prose {
+        doc: Doc::paragraphs(&[
+            "The the keeper climbed the the stairs.",
+            "Well, well. She had had enough of of it.",
+            "Nothing doubled here.",
+        ]),
+        settings: [(
+            "allow_doubled".to_string(),
+            Value::TextList(vec!["had".into()]),
+        )]
+        .into(),
+        ..Prose::default()
+    };
+    let mut p = load(&wasm("word_freq"), edits(), prose).unwrap();
+    let cmd = &p.prose().commands[1];
+    assert_eq!(cmd.name, "fix_doubled");
+    assert_eq!(cmd.ex_names, ["WordFreqFix"]);
+
+    p.run("fix_doubled", &[]).unwrap().unwrap();
+    let texts: Vec<_> = p
+        .prose()
+        .doc
+        .blocks
+        .iter()
+        .map(|b| b.text.as_str())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "The keeper climbed the stairs.",
+            "Well, well. She had had enough of it.",
+            "Nothing doubled here.",
+        ]
+    );
+    assert_eq!(p.prose().undo_steps, 1);
+    assert_eq!(messages(&p), ["Fixed 3 doubled words"]);
+
+    // Nothing left: no edit, no undo step.
+    p.run("fix_doubled", &[]).unwrap().unwrap();
+    assert_eq!(p.prose().undo_steps, 1);
+    assert_eq!(messages(&p)[1], "No doubled words");
+}
+
+#[test]
+fn word_freq_marks_and_clears_the_top_word() {
+    use host_test::Decoration;
+    use host_test::prose::plugin::decorations::Color;
+
+    let prose = Prose {
+        doc: Doc::paragraphs(&[
+            "Stairs and more stairs.",
+            "Nothing here.",
+            "The stairs again.",
+        ]),
+        ..Prose::default()
+    };
+    let mut p = load(&wasm("word_freq"), edits(), prose).unwrap();
+    p.run("mark_top", &[]).unwrap().unwrap();
+    assert_eq!(messages(&p), ["Marked stairs"]);
+
+    let marks = &p.prose().decorations["doc-1"];
+    let highlights: Vec<(String, u32, u32)> = marks
+        .iter()
+        .filter_map(|d| match d {
+            Decoration::Highlight(h) => {
+                assert_eq!(h.color, Color::Yellow);
+                Some((
+                    h.span.start.block.clone(),
+                    h.span.start.offset,
+                    h.span.end.offset,
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        highlights,
+        [
+            ("b0".to_string(), 0, 6),
+            ("b0".to_string(), 16, 22),
+            ("b2".to_string(), 4, 10),
+        ]
+    );
+    let margins: Vec<&str> = marks
+        .iter()
+        .filter_map(|d| match d {
+            Decoration::MarginMark(m) => Some(m.at.block.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(margins, ["b0", "b2"]);
+
+    p.run("clear_marks", &[]).unwrap().unwrap();
+    assert!(p.prose().decorations.is_empty());
+}
+
+#[test]
+fn word_freq_fix_retries_when_the_writer_typed() {
+    let mut p = load(
+        &wasm("word_freq"),
+        edits(),
+        Prose {
+            doc: Doc::paragraphs(&["at at last"]),
+            writer_types_once: true,
+            ..Prose::default()
+        },
+    )
+    .unwrap();
+    p.run("fix_doubled", &[]).unwrap().unwrap();
+    assert_eq!(p.prose().doc.blocks[0].text, "at last");
+    assert_eq!(p.prose().undo_steps, 1);
 }
 
 #[test]
@@ -207,7 +348,7 @@ fn smart_quotes_retries_when_the_writer_typed() {
 
 #[test]
 fn a_command_without_a_document_is_an_error() {
-    let mut p = load(&wasm("word_freq"), Grants::default(), Prose::default()).unwrap();
+    let mut p = load(&wasm("word_freq"), edits(), Prose::default()).unwrap();
     // Outside a command run on a document, `current()` gives none.
     let r = p.plugin.call_run_command(
         &mut p.store,
@@ -224,54 +365,201 @@ fn a_command_without_a_document_is_an_error() {
 }
 
 #[test]
-fn word_freq_marks_and_clears_the_top_word() {
-    use host_test::Decoration;
-    use host_test::prose::plugin::decorations::Color;
-
+fn filter_words_lints_paragraphs() {
     let prose = Prose {
-        doc: Doc::paragraphs(&[
-            "Stairs and more stairs.",
-            "Nothing here.",
-            "The stairs again.",
-        ]),
+        settings: [(
+            "words".to_string(),
+            Value::TextList(vec!["just".into(), "suddenly".into()]),
+        )]
+        .into(),
         ..Prose::default()
     };
-    let mut p = load(&wasm("word_freq"), Grants::default(), prose).unwrap();
-    p.run("mark_top", &[]).unwrap().unwrap();
-    assert_eq!(messages(&p), ["Marked stairs"]);
-
-    let marks = &p.prose().decorations["doc-1"];
-    let highlights: Vec<(String, u32, u32)> = marks
+    let mut p = load(&wasm("filter_words"), Grants::default(), prose).unwrap();
+    let text = "Suddenly she just left. \u{201c}I just can\u{2019}t,\u{201d} he said.";
+    let found = p.lint(text).unwrap();
+    let flagged: Vec<&str> = found
         .iter()
-        .filter_map(|d| match d {
-            Decoration::Highlight(h) => {
-                assert_eq!(h.color, Color::Yellow);
-                Some((
-                    h.span.start.block.clone(),
-                    h.span.start.offset,
-                    h.span.end.offset,
-                ))
-            }
-            _ => None,
-        })
+        .map(|d| &text[d.start as usize..d.end as usize])
         .collect();
+    assert_eq!(flagged, ["Suddenly ", "just "], "dialogue is left alone");
+    assert!(found.iter().all(|d| d.kind == DiagnosticKind::Style));
+    assert_eq!(found[1].rule, "filter_word");
+    assert_eq!(found[1].suggestions, [""]);
+    assert!(found[1].message.contains("just"));
+}
+
+#[test]
+fn a_plugin_without_the_export_has_no_lint() {
+    let p = load(&wasm("word_freq"), edits(), Prose::default()).unwrap();
+    assert!(p.lint.is_none());
+}
+
+fn grants() -> Grants {
+    Grants {
+        edit_documents: true,
+    }
+}
+
+#[test]
+fn smart_quotes_curls_quotes_in_a_compile() {
+    let prose = Prose {
+        doc: Doc::paragraphs(&[r#""Don't," she said."#, "No quotes here."]),
+        ..Prose::default()
+    };
+    let mut p = load(&wasm("smart_quotes"), grants(), prose).unwrap();
+    p.transform().unwrap().unwrap();
     assert_eq!(
-        highlights,
+        p.prose().doc.blocks[0].text,
+        "\u{201C}Don\u{2019}t,\u{201D} she said."
+    );
+    assert_eq!(p.prose().doc.blocks[1].text, "No quotes here.");
+    // A transform hands its ops back: nothing is applied as an edit.
+    assert_eq!(p.prose().undo_steps, 0);
+}
+
+#[test]
+fn word_freq_has_no_compile_hooks() {
+    let p = load(&wasm("word_freq"), edits(), Prose::default()).unwrap();
+    assert!(p.compile.is_none());
+}
+
+fn screenplay() -> Doc {
+    let mut doc = Doc::paragraphs(&[
+        "Act One",
+        "INT. LIGHTHOUSE - NIGHT",
+        "Rain hammers the glass. The lamp turns.",
+        "MARA: Who keeps the light now?",
+        "",
+        "THE END",
+    ]);
+    doc.title = "The Lighthouse".into();
+    doc.blocks[0].kind = BlockKind::Heading(1);
+    doc.blocks[4].kind = BlockKind::SceneBreak;
+    // "hammers" in italics.
+    doc.blocks[2].runs = vec![
+        run(5, Marks::empty()),
+        run(7, Marks::ITALIC),
+        run(27, Marks::empty()),
+    ];
+    doc
+}
+
+fn run(len: u32, marks: Marks) -> Run {
+    Run {
+        len,
+        marks,
+        style: None,
+    }
+}
+
+#[test]
+fn fountain_exports_a_screenplay() {
+    let prose = Prose {
+        doc: screenplay(),
+        ..Prose::default()
+    };
+    let mut p = load(&wasm("fountain"), Grants::default(), prose).unwrap();
+    let bytes = p.export("fountain", &[]).unwrap().unwrap();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "Title: The Lighthouse\n\
+         Credit: written by\n\
+         Author: Ada Lovelace\n\
+         \n\
+         # Act One\n\
+         \n\
+         INT. LIGHTHOUSE - NIGHT\n\
+         \n\
+         Rain *hammers* the glass. The lamp turns.\n\
+         \n\
+         MARA\n\
+         Who keeps the light now?\n\
+         \n\
+         ===\n\
+         \n\
+         !THE END\n\
+         \n"
+    );
+    assert!(p.export("pdf", &[]).unwrap().is_err());
+}
+
+#[test]
+fn fountain_writes_footnotes_as_notes() {
+    let mut doc = Doc::paragraphs(&["The lamp turns."]);
+    doc.blocks[0].annotations = vec![Annotation {
+        id: "n1".into(),
+        start: 8,
+        end: 8,
+        kind: AnnotationKind::Footnote,
+    }];
+    let prose = Prose {
+        doc,
+        ..Prose::default()
+    };
+    let mut p = load(&wasm("fountain"), Grants::default(), prose).unwrap();
+    let notes = [Note {
+        id: "n1".into(),
+        blocks: Doc::paragraphs(&["A Fresnel lens."]).blocks,
+    }];
+    let bytes = p.export("fountain", &notes).unwrap().unwrap();
+    let script = String::from_utf8(bytes).unwrap();
+    assert!(
+        script.ends_with("The lamp[[A Fresnel lens.]] turns.\n\n"),
+        "{script}"
+    );
+}
+
+#[test]
+fn fountain_imports_a_document_per_section() {
+    let mut p = load(&wasm("fountain"), Grants::default(), Prose::default()).unwrap();
+    let script = "Title: The Lighthouse\n\
+                  Author: Ada\n\
+                  \n\
+                  # Act One\n\
+                  = Mara arrives.\n\
+                  \n\
+                  INT. LIGHTHOUSE - NIGHT\n\
+                  \n\
+                  Rain **hammers** the glass.\n\
+                  \n\
+                  MARA\n\
+                  Who keeps\n\
+                  the light now?\n\
+                  \n\
+                  ===\n\
+                  \n\
+                  # Act Two\n\
+                  \n\
+                  ## Morning\n\
+                  \n\
+                  !THE END\n";
+    let docs = p
+        .import("fountain", "lighthouse.fountain", script.as_bytes())
+        .unwrap()
+        .unwrap();
+    let titles: Vec<&str> = docs.iter().map(|d| d.title.as_str()).collect();
+    assert_eq!(titles, ["Act One", "Act Two"]);
+    assert_eq!(docs[0].synopsis, "Mara arrives.");
+    let texts: Vec<&str> = docs[0].blocks.iter().map(|b| b.text.as_str()).collect();
+    assert_eq!(
+        texts,
         [
-            ("b0".to_string(), 0, 6),
-            ("b0".to_string(), 16, 22),
-            ("b2".to_string(), 4, 10),
+            "INT. LIGHTHOUSE - NIGHT",
+            "Rain hammers the glass.",
+            "MARA: Who keeps the light now?",
+            "",
         ]
     );
-    let margins: Vec<&str> = marks
-        .iter()
-        .filter_map(|d| match d {
-            Decoration::MarginMark(m) => Some(m.at.block.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(margins, ["b0", "b2"]);
+    let bold = &docs[0].blocks[1].runs[1];
+    assert_eq!((bold.len, bold.marks), (7, Marks::BOLD));
+    assert!(matches!(docs[0].blocks[3].kind, BlockKind::SceneBreak));
+    assert!(matches!(docs[1].blocks[0].kind, BlockKind::Heading(2)));
+    assert_eq!(docs[1].blocks[1].text, "THE END");
 
-    p.run("clear_marks", &[]).unwrap().unwrap();
-    assert!(p.prose().decorations.is_empty());
+    let untitled = p
+        .import("fountain", "draft.fountain", b"FADE IN:\n\nA beach.\n")
+        .unwrap()
+        .unwrap();
+    assert_eq!(untitled[0].title, "draft");
+    assert!(p.import("fdx", "x.fdx", b"").unwrap().is_err());
 }

@@ -2,8 +2,10 @@ id = "smart-quotes"
 name = "Smart Quotes"
 version = "0.1.0"
 api = "0.1.0"
-description = "Turns straight quotes into curly ones."
+description = "Turns straight quotes into curly ones, in the text and in every compile."
 authors = ["Prose"]
 license = "MIT OR Apache-2.0"
-permissions = ["edit-documents"]
+permissions = ["edit-documents", "compile"]
+# Curls the quotes of every compile too.
+compile-transform = true
 events = []

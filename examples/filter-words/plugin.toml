@@ -1,0 +1,22 @@
+id = "filter-words"
+name = "Filter Words"
+version = "0.1.0"
+api = "0.1.0"
+description = "Underlines filter words such as \"just\", \"really\" and \"suddenly\"."
+authors = ["Prose"]
+license = "MIT OR Apache-2.0"
+# It only reads the paragraphs Prose hands its lint export.
+permissions = []
+events = []
+
+[settings.words]
+title = "Filter words"
+kind = "text-list"
+default = ["just", "really", "suddenly", "very", "actually", "simply", "began to", "started to"]
+help = "Words and phrases to underline, matched whole and without regard to case."
+
+[settings.in_dialogue]
+title = "In dialogue too"
+kind = "boolean"
+default = false
+help = "Underline them inside quotation marks too. Off, characters may talk the way people do."

@@ -1,0 +1,149 @@
+package prose:plugin@0.1.0;
+
+/// Compile and import hooks: changing what Compile makes, writing formats
+/// Prose doesn't, and reading files Prose can't.
+///
+/// A plugin offers them by exporting this interface (the `compile-plugin`
+/// world; in the Rust SDK, `export!(T, compile)`), naming what it offers in
+/// `plugin.toml` (`compile-transform = true`, `[[export-format]]`,
+/// `[[import-format]]`) and asking for the `compile` permission. Prose only
+/// calls what `plugin.toml` names.
+///
+/// None of these reach the disk. Compile hands the plugin the manuscript and
+/// writes the bytes it returns where compile writes, through a temporary file
+/// and a rename; an import hands it the bytes of the file the writer picked
+/// and adds the documents it returns to the binder. Compile's progress bar and
+/// its Cancel cover these calls, and each may run as long as a command does.
+interface compile {
+  use types.{annotation-id, block, block-id, new-block, op};
+  use documents.{document};
+
+  /// What is being compiled.
+  record compile-info {
+    /// The preset's name.
+    preset: string,
+    /// What the preset writes: one of Prose's own formats (`rtf`, `docx`,
+    /// `pdf`, `epub`, `text`, `markdown`, `pandoc`), or a plugin's as
+    /// `<plugin id>.<format>`.
+    format: string,
+    /// The book's title and author, from the project.
+    title: string,
+    author: string,
+    /// With a preset that builds one output per store (`[[store]]`), the
+    /// store this build is for.
+    store: option<string>,
+  }
+
+  /// The text of a footnote, which the manuscript's `footnote`
+  /// annotation with the same id refers to.
+  record note {
+    id: annotation-id,
+    blocks: list<block>,
+  }
+
+  enum align {
+    left,
+    center,
+    right,
+  }
+
+  /// A paragraph's part in a chapter opening, as a book theme designs it.
+  enum role {
+    none,
+    chapter-ornament,
+    chapter-number,
+    chapter-title,
+    first-paragraph,
+  }
+
+  /// Body text: body paragraphs, quotes and list items. Sizes in points.
+  record body-layout {
+    font-size: f32,
+    /// A multiple of single spacing: 1.0, 1.5, 2.0.
+    line-spacing: f32,
+    first-line-indent: f32,
+    space-after: f32,
+  }
+
+  /// One paragraph laid out apart from its kind.
+  record paragraph-layout {
+    block: block-id,
+    page-break-before: bool,
+    /// `none` keeps the kind's alignment.
+    align: option<align>,
+    /// Space above, in points; `none` keeps the kind's.
+    space-before: option<f32>,
+    /// No first-line indent, as the first paragraph of a chapter or scene.
+    no-indent: bool,
+    role: role,
+    /// The pages it starts carry no running head or page number.
+    plain: bool,
+    /// Indent on the left of every line, in points.
+    indent: f32,
+  }
+
+  /// A line at the top of every page, with `{page}` where the page number
+  /// goes.
+  record running-header {
+    text: string,
+    align: align,
+    /// The first page (a title page) has no header and is not counted.
+    skip-first: bool,
+  }
+
+  /// The page, in points.
+  record page-setup {
+    width: f32,
+    height: f32,
+    margin-top: f32,
+    margin-right: f32,
+    margin-bottom: f32,
+    margin-left: f32,
+    header: option<running-header>,
+  }
+
+  /// How the preset lays the manuscript out. Empty parts leave it to the
+  /// format.
+  record layout {
+    body: option<body-layout>,
+    page: option<page-setup>,
+    /// Only the paragraphs laid out apart from their kind.
+    paragraphs: list<paragraph-layout>,
+  }
+
+  /// One document an import makes, added to the binder in the order given.
+  record imported {
+    /// Its title in the binder.
+    title: string,
+    /// Its synopsis; empty for none.
+    synopsis: string,
+    /// Its text. Block ids only need to differ from each other; Prose gives
+    /// the blocks its own.
+    blocks: list<new-block>,
+  }
+
+  /// Change the manuscript before it is written, after the preset's
+  /// replacements. `manuscript` is the whole book as Compile assembled it
+  /// (title page, front matter, chapter headings, the Draft, back matter),
+  /// read a page at a time like any document; its `id` is `compile` and its
+  /// `version` is 0. Return the ops to apply to it, in order, as an edit's
+  /// would be; an empty list leaves it as it is. Footnote text can be read
+  /// but not changed.
+  ///
+  /// Runs for every compile, for each plugin whose `plugin.toml` has
+  /// `compile-transform = true`, in order of plugin id. An error stops the
+  /// compile and is shown to the writer.
+  transform: func(info: compile-info, manuscript: document, notes: list<note>) -> result<list<op>, string>;
+
+  /// Write the manuscript as `format`, one of the `[[export-format]]`s in
+  /// `plugin.toml` (by `name`), and return the file's bytes. A preset uses it
+  /// as `format = "<plugin id>.<format>"`. An error stops the compile and is
+  /// shown to the writer.
+  export-format: func(format: string, info: compile-info, manuscript: document, notes: list<note>, layout: layout) -> result<list<u8>, string>;
+
+  /// Read a file the writer chose to import as `format`, one of the
+  /// `[[import-format]]`s in `plugin.toml`: `file-name` is its name without
+  /// the folder, `bytes` its contents. Return the documents to make; an
+  /// error is shown to the writer and nothing is added.
+  import-format: func(format: string, file-name: string, bytes: list<u8>) -> result<list<imported>, string>;
+}

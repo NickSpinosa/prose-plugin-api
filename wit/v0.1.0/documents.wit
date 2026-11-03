@@ -2,9 +2,9 @@ package prose:plugin@0.1.0;
 
 /// Reading the writer's documents.
 ///
-/// In 0.1 a plugin reads the document a command was run on. Reading every
-/// document in the project will come with the `read-project` permission in a
-/// later interface. Editing is the `edits` interface, linked only for plugins
+/// Without other permissions a plugin reads the document a command was run
+/// on. With `read-project`, `project.open` gives any document and
+/// `history.read` a document as a revision kept it. Editing is the `edits` interface, linked only for plugins
 /// with the `edit-documents` permission.
 interface documents {
   use types.{block-id, block, selection};

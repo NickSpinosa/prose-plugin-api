@@ -49,11 +49,54 @@ pub mod bindings {
         bitflags_path: "::prose_plugin::__private::wit_bindgen::rt::bitflags",
         additional_derives: [PartialEq],
     });
+
+    /// The `lint` export, generated on its own so that only a plugin that
+    /// exports it with [`export!`](crate::export)`(Type, lint)` has it.
+    /// The component then targets the `linter` world.
+    pub mod lint {
+        wit_bindgen::generate!({
+            path: "../../wit/v0.1.0",
+            inline: "package prose:sdk;\nworld lint-export { export prose:plugin/lint@0.1.0; }",
+            world: "prose:sdk/lint-export",
+            pub_export_macro: true,
+            export_macro_name: "__export_lint",
+            default_bindings_module: "::prose_plugin::bindings::lint",
+            runtime_path: "::prose_plugin::__private::wit_bindgen::rt",
+            bitflags_path: "::prose_plugin::__private::wit_bindgen::rt::bitflags",
+            additional_derives: [PartialEq],
+        });
+    }
+
+    /// The `compile` export (compile and import hooks), generated on its
+    /// own like `lint`: only a plugin exported with
+    /// [`export!`](crate::export)`(Type, compile)` has it, and the component
+    /// then targets the `compile-plugin` world.
+    pub mod compile {
+        wit_bindgen::generate!({
+            path: "../../wit/v0.1.0",
+            inline: "package prose:sdk;\nworld compile-export { export prose:plugin/compile@0.1.0; }",
+            world: "prose:sdk/compile-export",
+            with: {
+                "prose:plugin/types@0.1.0": crate::bindings::prose::plugin::types,
+                "prose:plugin/documents@0.1.0": crate::bindings::prose::plugin::documents,
+            },
+            pub_export_macro: true,
+            export_macro_name: "__export_compile",
+            default_bindings_module: "::prose_plugin::bindings::compile",
+            runtime_path: "::prose_plugin::__private::wit_bindgen::rt",
+            additional_derives: [PartialEq],
+        });
+    }
 }
 
+pub mod binder;
 mod command;
+pub mod compile;
 pub mod decorations;
 mod document;
+pub mod history;
+mod lint;
+pub mod project;
 pub mod settings;
 pub mod ui;
 pub mod workspace;
@@ -64,7 +107,9 @@ pub use bindings::prose::plugin::types::{
 };
 pub use bindings::{CompileFinished, Context, DocumentChanged, Event, SelectionChanged};
 pub use command::{Argument, Command, RegisterError};
+pub use compile::Compile;
 pub use document::{Document, Edit, EditError, InvalidOp, new_id};
+pub use lint::{Diagnostic, DiagnosticKind, Lint};
 
 /// The version of the WIT package this crate is built against. A plugin's
 /// `plugin.toml` names it as `api`.
@@ -102,9 +147,109 @@ impl Context {
 
 /// Exports a [`Plugin`] type as the component's implementation of the
 /// `plugin` world. Use it once, at the crate root.
+///
+/// A plugin that also checks paragraphs implements [`Lint`] and passes
+/// `lint` too: `prose_plugin::export!(FilterWords, lint);`. A plugin with
+/// compile and import hooks implements [`Compile`] and passes `compile`:
+/// `prose_plugin::export!(Fountain, compile);`. One with both passes
+/// `lint, compile`.
 #[macro_export]
 macro_rules! export {
     ($plugin:ty) => {
+        $crate::__export_plugin!($plugin, {});
+    };
+    ($plugin:ty, lint) => {
+        $crate::__export_plugin!($plugin, {
+            $crate::__prose_lint_export!();
+        });
+    };
+    ($plugin:ty, compile) => {
+        $crate::__export_plugin!($plugin, {
+            $crate::__prose_compile_export!();
+        });
+    };
+    ($plugin:ty, lint, compile) => {
+        $crate::__export_plugin!($plugin, {
+            $crate::__prose_lint_export!();
+            $crate::__prose_compile_export!();
+        });
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __prose_lint_export {
+    () => {
+        struct __ProseLint;
+
+        impl $crate::bindings::lint::exports::prose::plugin::lint::Guest for __ProseLint {
+            fn lint(paragraph: ::std::string::String) -> ::std::vec::Vec<$crate::Diagnostic> {
+                __PROSE_PLUGIN.with_borrow_mut(|p| $crate::Lint::lint(p, &paragraph))
+            }
+        }
+
+        $crate::bindings::lint::__export_lint!(__ProseLint);
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __prose_compile_export {
+    () => {
+        struct __ProseCompile;
+
+        impl $crate::bindings::compile::exports::prose::plugin::compile::Guest for __ProseCompile {
+            fn transform(
+                info: $crate::compile::CompileInfo,
+                manuscript: $crate::bindings::prose::plugin::documents::Document,
+                notes: ::std::vec::Vec<$crate::compile::Note>,
+            ) -> ::std::result::Result<::std::vec::Vec<$crate::Op>, ::std::string::String> {
+                __PROSE_PLUGIN.with_borrow_mut(|p| {
+                    $crate::Compile::transform(p, info, manuscript.into(), notes)
+                })
+            }
+
+            fn export_format(
+                format: ::std::string::String,
+                info: $crate::compile::CompileInfo,
+                manuscript: $crate::bindings::prose::plugin::documents::Document,
+                notes: ::std::vec::Vec<$crate::compile::Note>,
+                layout: $crate::compile::Layout,
+            ) -> ::std::result::Result<::std::vec::Vec<u8>, ::std::string::String> {
+                __PROSE_PLUGIN.with_borrow_mut(|p| {
+                    $crate::Compile::export_format(
+                        p,
+                        &format,
+                        info,
+                        manuscript.into(),
+                        notes,
+                        layout,
+                    )
+                })
+            }
+
+            fn import_format(
+                format: ::std::string::String,
+                file_name: ::std::string::String,
+                bytes: ::std::vec::Vec<u8>,
+            ) -> ::std::result::Result<
+                ::std::vec::Vec<$crate::compile::Imported>,
+                ::std::string::String,
+            > {
+                __PROSE_PLUGIN.with_borrow_mut(|p| {
+                    $crate::Compile::import_format(p, &format, &file_name, bytes)
+                })
+            }
+        }
+
+        $crate::bindings::compile::__export_compile!(__ProseCompile);
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __export_plugin {
+    ($plugin:ty, { $($more:tt)* }) => {
         const _: () = {
             ::std::thread_local! {
                 static __PROSE_PLUGIN: ::std::cell::RefCell<$plugin> =
@@ -133,6 +278,8 @@ macro_rules! export {
             }
 
             $crate::bindings::__export_world!(__ProseGuest);
+
+            $($more)*
         };
     };
 }
