@@ -221,7 +221,10 @@ mod tests {
     #[test]
     fn keeps_punctuated_allowed_and_different_words() {
         assert_eq!(fixed("Well, well.", &[]), "Well, well.");
-        assert_eq!(fixed("She had had enough.", &["had"]), "She had had enough.");
+        assert_eq!(
+            fixed("She had had enough.", &["had"]),
+            "She had had enough."
+        );
         assert_eq!(fixed("the then", &[]), "the then");
         assert_eq!(fixed("can't can't", &[]), "can't");
     }
