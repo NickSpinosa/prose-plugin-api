@@ -18,14 +18,17 @@ Prose's own source is not here. The WIT is the whole contract between Prose and 
 | `ui` | Status messages, notifications with buttons, text and choice prompts, a log. | none |
 | `settings` | The plugin's own `[plugins.<id>]` table from the writer's `settings.toml`. | none |
 | `workspace` | The open project's name, the documents open in panes and the active one, and opening a document in a pane or a split. | none |
+| `project` | The whole project: the binder and every item's metadata (synopsis, label, status, keywords, target, custom fields) and notes, any document's text, project search, word counts, the session's words and the words written each day. | `read-project` |
+| `history` | The project's drafts and revisions, a document's versions and snapshots, and a document as any of them kept it. Read only. | `read-project` |
+| `binder` | Making, retitling, moving, duplicating and trashing binder items, setting their metadata and custom fields, and replacing text across the project. Each call is one change the writer can undo from the binder; nothing empties the trash. | `edit-binder` |
 
 Prose calls three functions the plugin exports: `activate` (register commands), `run-command`, and `on-event` (for the events the plugin's `plugin.toml` lists: document opened, saved or changed, idle, timers and so on).
 
-Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers, decorations over text, spelling and style checks, compile and import formats, panels, and reading the whole project.
+Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers, decorations over text, spelling and style checks, compile and import formats, and panels.
 
 ### Permissions
 
-A plugin asks for permissions in `plugin.toml`, and the writer grants them when installing it. Prose links only the interfaces a plugin was granted, so a plugin that imports `edits` without `edit-documents` doesn't load at all. A component only imports the interfaces it actually calls, so a plugin that never edits doesn't need the permission.
+A plugin asks for permissions in `plugin.toml`, and the writer grants them when installing it. Prose links only the interfaces a plugin was granted, so a plugin that imports `edits` without `edit-documents` (or `project` without `read-project`, or `binder` without `edit-binder`) doesn't load at all. No permission reaches git remotes, credentials, Prose's license, other plugins' data, `settings.toml` beyond the plugin's own table, or the shell: the API takes binder ids and revision ids, never paths. A component only imports the interfaces it actually calls, so a plugin that never edits doesn't need the permission.
 
 Plugins run in a sandbox: no files, no network, no clock beyond WASI's monotonic clock, and no other process. Prose stops a call that runs too long and turns off a plugin that keeps failing.
 

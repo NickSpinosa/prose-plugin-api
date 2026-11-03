@@ -4,7 +4,8 @@ package prose:plugin@0.1.0;
 /// are what Prose calls.
 ///
 /// Some imports need a permission in the plugin's `plugin.toml` that the
-/// writer granted: `edits` needs `edit-documents`. Prose links only the
+/// writer granted: `edits` needs `edit-documents`, `project` and `history`
+/// need `read-project`, and `binder` needs `edit-binder`. Prose links only the
 /// interfaces a plugin was granted, so a component that imports one it was
 /// not granted does not load. A plugin only imports what it calls, so one
 /// that never edits does not need the permission.
@@ -21,6 +22,9 @@ world plugin {
   import ui;
   import settings;
   import workspace;
+  import project;
+  import history;
+  import binder;
 
   use types.{selection, span, op};
 

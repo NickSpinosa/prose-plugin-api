@@ -1,0 +1,300 @@
+package prose:plugin@0.1.0;
+
+/// Reading the whole project: the binder and every item's metadata and
+/// notes, any document's text, project search, word counts and the writing
+/// history. Needs the `read-project` permission: without it Prose does not
+/// link this interface, so a plugin that imports it does not load.
+///
+/// Ids are binder ids, as `documents.document.id` and `workspace` give them.
+/// Everything here is read as the call first asks for it and stays the same
+/// for the rest of the call, like a document does.
+interface project {
+  use documents.{document};
+
+  /// Whether a binder item is a document or a folder.
+  enum item-kind {
+    document,
+    folder,
+  }
+
+  /// The project's top-level folders. Every item is inside one of them.
+  enum root-folder {
+    /// The manuscript (Prose calls it the Draft): what compile takes.
+    manuscript,
+    research,
+    templates,
+    /// Moving an item here is how it is deleted. Only the writer empties it.
+    trash,
+  }
+
+  /// A custom field's value.
+  variant field-value {
+    text(string),
+    flag(bool),
+    /// A TOML date or date-time, as the file has it (`2026-11-03`).
+    date(string),
+  }
+
+  /// One custom field's value on an item.
+  record custom-value {
+    /// The field's id, from `fields`.
+    field: string,
+    value: field-value,
+  }
+
+  /// A binder item and its metadata, as the inspector shows it.
+  record item {
+    id: string,
+    kind: item-kind,
+    title: string,
+    /// The folder it is in; `none` for a top-level folder.
+    parent: option<string>,
+    /// The top-level folder it is under (itself, for one).
+    root: root-folder,
+    /// 0 for a top-level folder, 1 for what is in one, and so on.
+    depth: u32,
+    synopsis: string,
+    /// A label id, from `labels`.
+    label: option<string>,
+    /// A status id, from `statuses`.
+    status: option<string>,
+    keywords: list<string>,
+    /// The writer's word target for it.
+    target-words: option<u64>,
+    /// Whether compile takes it (a folder: with everything in it).
+    include-in-compile: bool,
+    /// Custom field values, by field.
+    custom: list<custom-value>,
+    /// Listed in the binder, but its file is not on disk.
+    missing: bool,
+  }
+
+  /// A label or a status the project defines.
+  record definition {
+    id: string,
+    title: string,
+    /// `#rrggbb`, for labels.
+    color: option<string>,
+  }
+
+  /// What a custom field holds.
+  enum field-kind {
+    text,
+    /// One of the field's `options`.
+    choice,
+    checkbox,
+    date,
+  }
+
+  /// A custom field the project defines.
+  record field {
+    id: string,
+    title: string,
+    kind: field-kind,
+    /// The values a `choice` field allows.
+    options: list<string>,
+  }
+
+  /// Where a search looks in each document.
+  enum place {
+    title,
+    synopsis,
+    /// The document's paragraphs, headings, quotes and list items.
+    text,
+    footnote,
+    comment,
+  }
+
+  /// What to search for, as the project search panel does.
+  record query {
+    text: string,
+    case-sensitive: bool,
+    whole-word: bool,
+    /// `text` is a regular expression (Rust's `regex` syntax).
+    regex: bool,
+    /// Where to look in each document; empty for everywhere.
+    places: list<place>,
+    /// Which top-level folders to look in; empty for all but the trash.
+    folders: list<root-folder>,
+  }
+
+  /// One match.
+  record hit {
+    /// The document's id.
+    document: string,
+    place: place,
+    /// For `text`, the paragraph the match is in, counted from 0 as
+    /// `document.blocks` counts them; for a footnote or comment, the
+    /// paragraph its reference or anchor is in. 0 for a title or synopsis.
+    paragraph: u32,
+    /// The bytes matched, in the string the match is in (the paragraph's
+    /// text for `text`, the note paragraph's for a footnote or comment).
+    start: u32,
+    end: u32,
+    /// A line of text around the match, for showing.
+    snippet: string,
+  }
+
+  /// Why a search failed.
+  variant search-error {
+    /// The regular expression doesn't parse; the message says why.
+    bad-query(string),
+    /// No project is open.
+    no-project,
+  }
+
+  /// A day's writing.
+  record day {
+    /// `YYYY-MM-DD`, in the writer's time zone.
+    date: string,
+    /// Net words written that day (deleting counts against it), on every
+    /// computer the project was written on.
+    words: s64,
+  }
+
+  /// Every item in the binder, folders before what is in them, in binder
+  /// order: the Manuscript and everything in it, then Research, Templates
+  /// and the Trash. Empty when no project is open.
+  items: func() -> list<item>;
+
+  /// One item.
+  find: func(id: string) -> option<item>;
+
+  /// The id of a top-level folder.
+  root: func(folder: root-folder) -> option<string>;
+
+  /// An item's notes (the inspector's Notes), as Markdown; `none` when it
+  /// has none.
+  notes: func(id: string) -> option<string>;
+
+  /// The project's labels.
+  labels: func() -> list<definition>;
+
+  /// The project's statuses.
+  statuses: func() -> list<definition>;
+
+  /// The project's custom fields.
+  fields: func() -> list<field>;
+
+  /// Any document in the project, open in a pane or not. A pane's text is
+  /// read when one shows it (unsaved changes and all), else the file. Only a
+  /// document a pane shows can be edited (`edits.apply` on another returns
+  /// `gone`).
+  open: func(id: string) -> option<document>;
+
+  /// Search every document, as the project search panel does, stopping
+  /// after `limit` hits. Hits come in binder order, and in each document
+  /// its title, synopsis, then its text in reading order.
+  search: func(query: query, limit: u32) -> result<list<hit>, search-error>;
+
+  /// The words in a document, or in a folder and everything in it, as the
+  /// binder counts them. A document Prose has not counted yet adds nothing
+  /// to its folders.
+  word-count: func(id: string) -> option<u64>;
+
+  /// Net words written since the project was opened (or since the writer
+  /// reset the session count), and the session target, if any.
+  session-words: func() -> s64;
+  session-target: func() -> option<u64>;
+
+  /// Every day with writing, oldest first, today included.
+  daily-words: func() -> list<day>;
+}
+
+/// The project's history, read only: revisions, drafts, a document's
+/// versions and snapshots, and their text. Needs the `read-project`
+/// permission. Making revisions, switching drafts and anything that
+/// reaches a remote stay the writer's.
+interface history {
+  use documents.{document};
+
+  /// Why a revision was made.
+  enum revision-kind {
+    /// By Prose, at a pause or when the project closed.
+    automatic,
+    /// The writer's "Make a revision".
+    manual,
+    /// A snapshot of one document.
+    snapshot,
+    /// Combining two drafts.
+    combine,
+    /// Made outside Prose.
+    other,
+  }
+
+  /// A saved state of the whole project.
+  record revision {
+    /// Opaque: pass it back to `read`.
+    id: string,
+    /// The writer's message.
+    message: string,
+    kind: revision-kind,
+    /// Who made it (a name, never an email address).
+    author: string,
+    /// When, in seconds since the Unix epoch, and the author's UTC offset
+    /// at the time, in seconds.
+    time: s64,
+    utc-offset: s32,
+  }
+
+  /// A draft: one line of revisions, like a git branch.
+  record draft {
+    /// Opaque: pass it back to `revisions`.
+    id: string,
+    title: string,
+    /// Its latest revision's id.
+    latest: string,
+    /// The draft the project shows now.
+    current: bool,
+    /// Set aside by the writer.
+    set-aside: bool,
+  }
+
+  /// What a revision did to a document.
+  enum change {
+    /// It first appears here.
+    created,
+    edited,
+    /// Retitled or moved, text unchanged.
+    moved,
+    edited-and-moved,
+    /// Deleted outright (moving to the trash is a move).
+    removed,
+  }
+
+  /// A revision that changed a document.
+  record version {
+    revision: revision,
+    change: change,
+  }
+
+  /// A named snapshot of a document.
+  record snapshot {
+    /// Its place among the document's snapshots, from 1.
+    number: u32,
+    title: string,
+    /// The revision that keeps it: pass it to `read`.
+    revision: string,
+    time: s64,
+    utc-offset: s32,
+  }
+
+  /// The drafts, the current one first. Empty when the project has no
+  /// history.
+  drafts: func() -> list<draft>;
+
+  /// Up to `count` revisions of a draft (the current one if `none`),
+  /// newest first, skipping the newest `start`.
+  revisions: func(draft: option<string>, start: u32, count: u32) -> list<revision>;
+
+  /// Up to `count` revisions that changed a document, newest first,
+  /// skipping the newest `start`, in the current draft.
+  versions: func(document: string, start: u32, count: u32) -> list<version>;
+
+  /// A document's snapshots, oldest first.
+  snapshots: func(document: string) -> list<snapshot>;
+
+  /// A document as revision `revision` kept it, read only (its version is
+  /// 0, and `edits.apply` returns `gone`). `none` if it did not exist then.
+  read: func(document: string, revision: string) -> option<document>;
+}
