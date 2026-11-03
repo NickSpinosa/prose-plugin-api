@@ -117,3 +117,11 @@ world compile-plugin {
   include plugin;
   export compile;
 }
+
+/// A plugin that answers apps on this computer (the `serve` interface):
+/// everything `plugin` is, and `serve`. Its `plugin.toml` needs the `serve`
+/// permission and a `port`.
+world server {
+  include plugin;
+  export serve;
+}
