@@ -1,0 +1,19 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+edition = "2024"
+authors = ["{{authors}}"]
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+prose-plugin = { git = "https://github.com/NickSpinosa/prose-plugin-api", branch = "main" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

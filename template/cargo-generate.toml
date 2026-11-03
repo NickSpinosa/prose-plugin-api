@@ -1,0 +1,16 @@
+[template]
+cargo_generate_version = ">=0.21"
+
+[placeholders.title]
+type = "string"
+prompt = "Plugin name, as writers will see it (e.g. Word Frequency)"
+
+[placeholders.ex_name]
+type = "string"
+prompt = "Its command on the : line, starting with a capital (e.g. WordFreq)"
+regex = "^[A-Z][A-Za-z0-9]*$"
+
+[placeholders.description]
+type = "string"
+prompt = "One line on what it does"
+default = "A Prose plugin."

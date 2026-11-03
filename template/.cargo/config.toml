@@ -1,0 +1,4 @@
+# Plugins are WebAssembly components. `cargo build --release` puts the
+# plugin at target/wasm32-wasip2/release/{{crate_name}}.wasm.
+[build]
+target = "wasm32-wasip2"

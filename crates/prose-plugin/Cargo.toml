@@ -1,0 +1,11 @@
+[package]
+name = "prose-plugin"
+description = "Write plugins for Prose, the writing app, in Rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+wit-bindgen.workspace = true

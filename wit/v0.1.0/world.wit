@@ -1,0 +1,97 @@
+package prose:plugin@0.1.0;
+
+/// What a Prose plugin is. Its imports are what Prose offers; its exports
+/// are what Prose calls.
+///
+/// Some imports need a permission in the plugin's `plugin.toml` that the
+/// writer granted: `edits` needs `edit-documents`. Prose links only the
+/// interfaces a plugin was granted, so a component that imports one it was
+/// not granted does not load. A plugin only imports what it calls, so one
+/// that never edits does not need the permission.
+///
+/// Calls into a plugin run on its own worker thread, never Prose's UI thread,
+/// so a plugin may block on a host call (a prompt waits for the writer).
+/// Prose stops a call that runs too long and turns off a plugin that keeps
+/// failing.
+world plugin {
+  import types;
+  import documents;
+  import edits;
+  import commands;
+  import ui;
+  import settings;
+
+  use types.{selection, span, op};
+
+  /// Where a command was run from.
+  record context {
+    /// The binder id of the document the command was run on, if any.
+    document: option<string>,
+    /// The selection in that document when it ran.
+    selection: option<selection>,
+    /// For a command run as a vim operator, the span the motion covered.
+    span: option<span>,
+    /// A vim count typed before it (`3:` or `3<leader>x`), if any.
+    count: option<u32>,
+  }
+
+  /// Something that happened. A plugin only gets the events its `plugin.toml`
+  /// subscribes to. There is deliberately no per-keystroke event.
+  variant event {
+    /// A project was opened; its name.
+    project-opened(string),
+    /// The project is about to close.
+    project-closing,
+    /// A document was opened in a pane; its id.
+    document-opened(string),
+    /// A document was written to disk; its id.
+    document-saved(string),
+    /// A document was edited. Debounced, so it may carry several edits.
+    document-changed(document-changed),
+    /// The selection moved in the active pane. Debounced.
+    selection-changed(selection-changed),
+    /// The binder changed (an item added, moved, renamed or removed).
+    binder-changed,
+    /// A revision was made; its id.
+    revision-made(string),
+    /// A snapshot was taken of a document; the document's id.
+    snapshot-taken(string),
+    /// A compile finished.
+    compile-finished(compile-finished),
+    /// The writer paused typing for 2 seconds. At most once per pause.
+    idle,
+    /// The timer `plugin.toml` asked for fired.
+    timer,
+  }
+
+  record document-changed {
+    document: string,
+    /// The version after the changes.
+    version: u64,
+    /// The changes since the last `document-changed`, in order.
+    ops: list<op>,
+  }
+
+  record selection-changed {
+    document: string,
+    selection: selection,
+  }
+
+  record compile-finished {
+    preset: string,
+    /// Where the output was written.
+    path: string,
+  }
+
+  /// Called once when the plugin loads. Register commands here. An error
+  /// turns the plugin off and shows the message to the writer.
+  export activate: func() -> result<_, string>;
+
+  /// Run the command registered as `name`. `args` are the words after its
+  /// name on the `:` line (one for a `text` argument). An error is shown to
+  /// the writer.
+  export run-command: func(name: string, args: list<string>, context: context) -> result<_, string>;
+
+  /// Handle an event the plugin subscribed to.
+  export on-event: func(event: event);
+}
