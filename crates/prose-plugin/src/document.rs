@@ -83,6 +83,18 @@ impl Document {
         }
     }
 
+    /// Byte `offset` into block `block`'s text as UTF-16 code units, for
+    /// handing to a JavaScript-style string. `None` for a missing block or
+    /// an offset off a character boundary.
+    pub fn utf16_offset(&self, block: &str, offset: u32) -> Option<u32> {
+        self.raw.utf16_offset(block, offset)
+    }
+
+    /// The byte offset `units` UTF-16 code units into block `block`'s text.
+    pub fn byte_offset(&self, block: &str, units: u32) -> Option<u32> {
+        self.raw.byte_offset(block, units)
+    }
+
     /// The selection, if the document is in the active pane.
     pub fn selection(&self) -> Option<Selection> {
         self.raw.selection()

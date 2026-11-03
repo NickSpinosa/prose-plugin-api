@@ -16,7 +16,13 @@ interface documents {
     id: func() -> string;
     /// Its title in the binder.
     title: func() -> string;
-    /// Goes up with every change. Pass it as `transaction.base-version`.
+    /// Goes up with every change (and may go up without one, between
+    /// calls). Pass it as `transaction.base-version`.
+    ///
+    /// Within one call a document reads the same throughout, as it was when
+    /// the call first read it, even if the writer types meanwhile; an
+    /// `apply` that returns `stale` or succeeds lets the next read see the
+    /// document as it is now.
     version: func() -> u64;
     /// How many blocks the document has.
     block-count: func() -> u32;
@@ -32,6 +38,15 @@ interface documents {
     /// The selection in the pane showing this document, if it is the active
     /// pane.
     selection: func() -> option<selection>;
+    /// Byte `offset` into block `block`'s text as UTF-16 code units from the
+    /// block's start, for languages whose strings count UTF-16 (JavaScript,
+    /// C#). `none` for a missing block or an offset off a character
+    /// boundary.
+    utf16-offset: func(block: block-id, offset: u32) -> option<u32>;
+    /// The byte offset `units` UTF-16 code units into block `block`'s text.
+    /// `none` for a missing block, past its end, or inside a character
+    /// written as two units.
+    byte-offset: func(block: block-id, units: u32) -> option<u32>;
   }
 
   /// The document the running command was run on (`context.document`).
@@ -65,7 +80,9 @@ interface edits {
     message: string,
   }
 
-  /// Apply `edit` to `document` as one undo step, titled with the running
-  /// command's title (so `u` undoes it whole). Returns the new version.
+  /// Apply `edit` to `document`. Everything one command or event applies to
+  /// a document is one undo step, however many `apply` calls it takes, so
+  /// `u` undoes the whole plugin action (unless the writer edited the
+  /// document in between, which starts a new step). Returns the new version.
   apply: func(document: borrow<document>, edit: transaction) -> result<u64, edit-error>;
 }

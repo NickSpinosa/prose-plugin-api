@@ -55,6 +55,7 @@ mod command;
 mod document;
 pub mod settings;
 pub mod ui;
+pub mod workspace;
 
 pub use bindings::prose::plugin::types::{
     self, Annotation, AnnotationKind, Block, BlockKind, HighlightColor, ListItem, ListMarker,

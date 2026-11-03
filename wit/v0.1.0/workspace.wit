@@ -1,0 +1,45 @@
+package prose:plugin@0.1.0;
+
+/// The open project and the panes showing its documents.
+interface workspace {
+  /// A document shown in a pane.
+  record open-document {
+    /// Its binder id.
+    id: string,
+    /// Its title in the binder.
+    title: string,
+    /// Whether it is in the active pane.
+    active: bool,
+  }
+
+  /// Where `open` shows a document.
+  enum placement {
+    /// In the active pane, in place of what it shows.
+    active-pane,
+    /// In a new pane split beside the active one.
+    split-right,
+    /// In a new pane split below the active one.
+    split-down,
+  }
+
+  /// Why `open` did nothing.
+  variant open-error {
+    /// No project is open, or it has no document with this id.
+    no-such-document,
+    /// The active pane has changes that leaving it would lose.
+    unsaved,
+  }
+
+  /// The open project's name, or `none` when no project is open.
+  project-name: func() -> option<string>;
+
+  /// The documents shown in panes, in the order of the panes, each once.
+  open-documents: func() -> list<open-document>;
+
+  /// The binder id of the document in the active pane, if it shows one.
+  active-document: func() -> option<string>;
+
+  /// Show a document. Opening one reads it from disk, so it may show a
+  /// moment after this returns.
+  open: func(document: string, placement: placement) -> result<_, open-error>;
+}
