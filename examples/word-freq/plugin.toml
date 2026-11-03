@@ -1,0 +1,30 @@
+id = "word-freq"
+name = "WordFreq"
+version = "0.1.0"
+api = "0.1.0"
+description = "Lists the most used words in a document."
+authors = ["Prose"]
+license = "MIT OR Apache-2.0"
+# Reads only the document it is run on, so it needs no permissions.
+permissions = []
+events = []
+
+[settings.ignore]
+kind = "text-list"
+default = ["the", "and", "a", "to", "of", "in", "was", "he", "she", "it", "that", "her", "his", "i"]
+help = "Words left out of the list."
+
+[settings.min_length]
+title = "Shortest word"
+kind = "integer"
+default = 3
+min = 1
+max = 20
+help = "Words shorter than this are left out."
+
+[settings.count]
+kind = "integer"
+default = 10
+min = 1
+max = 100
+help = "How many words to list when :WordFreq is run without a number."

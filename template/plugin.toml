@@ -1,0 +1,22 @@
+# Read by Prose when it installs the plugin. Copy the built .wasm next to this
+# file as plugin.wasm.
+id = "{{project-name}}"
+name = "{{title}}"
+version = "0.1.0"
+api = "0.1.0"
+description = "{{description}}"
+authors = ["{{authors}}"]
+license = "MIT OR Apache-2.0"
+# What the plugin may do beyond its own commands and messages. Add
+# "edit-documents" to change the writer's text.
+permissions = []
+# Events to receive in on_event, e.g. ["document-saved", "idle"].
+events = []
+
+# The plugin's settings, shown on Prose's settings screen and read with
+# prose_plugin::settings. The writer sets them in settings.toml under
+# [plugins.{{project-name}}].
+# [settings.greeting]
+# kind = "text"
+# default = "Hello"
+# help = "What to say."

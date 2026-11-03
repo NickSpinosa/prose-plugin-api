@@ -1,0 +1,71 @@
+package prose:plugin@0.1.0;
+
+/// Reading the writer's documents.
+///
+/// In 0.1 a plugin reads the document a command was run on. Reading every
+/// document in the project will come with the `read-project` permission in a
+/// later interface. Editing is the `edits` interface, linked only for plugins
+/// with the `edit-documents` permission.
+interface documents {
+  use types.{block-id, block, selection};
+
+  /// A handle on one document. Reading is cheap: blocks come a page at a
+  /// time, so a 300,000-word manuscript is never copied whole.
+  resource document {
+    /// The document's binder id, stable for the life of the project.
+    id: func() -> string;
+    /// Its title in the binder.
+    title: func() -> string;
+    /// Goes up with every change. Pass it as `transaction.base-version`.
+    version: func() -> u64;
+    /// How many blocks the document has.
+    block-count: func() -> u32;
+    /// Up to `count` blocks, from block number `start` (0-based). Fewer, or
+    /// none, past the end.
+    blocks: func(start: u32, count: u32) -> list<block>;
+    /// One block by id.
+    block: func(id: block-id) -> option<block>;
+    /// The index of a block, for paging from it.
+    block-index: func(id: block-id) -> option<u32>;
+    /// The document's words, counted the way Prose's status bar counts.
+    word-count: func() -> u32;
+    /// The selection in the pane showing this document, if it is the active
+    /// pane.
+    selection: func() -> option<selection>;
+  }
+
+  /// The document the running command was run on (`context.document`).
+  /// `none` outside `run-command`, or when the command has no document.
+  current: func() -> option<document>;
+
+  /// A fresh id for a block or an annotation the plugin is about to create.
+  new-id: func() -> string;
+}
+
+/// Changing documents. Needs the `edit-documents` permission: without it
+/// Prose does not link this interface, so a plugin that imports it does not
+/// load.
+interface edits {
+  use types.{transaction};
+  use documents.{document};
+
+  /// Why an edit was refused. The document is unchanged in every case.
+  variant edit-error {
+    /// The document changed after `base-version`. Read again and retry.
+    stale,
+    /// Op `index` could not be applied (a missing block, an offset off a
+    /// character boundary, runs that do not cover their text, ...).
+    invalid-op(invalid-op),
+    /// The document was closed or deleted.
+    gone,
+  }
+
+  record invalid-op {
+    index: u32,
+    message: string,
+  }
+
+  /// Apply `edit` to `document` as one undo step, titled with the running
+  /// command's title (so `u` undoes it whole). Returns the new version.
+  apply: func(document: borrow<document>, edit: transaction) -> result<u64, edit-error>;
+}

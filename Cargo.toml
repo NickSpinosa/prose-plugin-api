@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["crates/prose-plugin", "examples/*", "tests/host"]
+# The host test builds Wasmtime, which takes a few minutes the first time:
+# run it with `cargo test -p host-test`.
+exclude = ["template"]
+default-members = ["crates/prose-plugin", "examples/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NickSpinosa/prose-plugin-api"
+rust-version = "1.90"
+
+[workspace.dependencies]
+prose-plugin = { path = "crates/prose-plugin" }
+wit-bindgen = "0.63"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

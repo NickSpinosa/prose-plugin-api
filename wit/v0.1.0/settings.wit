@@ -1,0 +1,26 @@
+package prose:plugin@0.1.0;
+
+/// The plugin's own settings: the `[plugins.<plugin id>]` table of the
+/// writer's `settings.toml`. Read only; the writer edits the file, or the
+/// settings screen does from the schema in `plugin.toml`. Prose reads the
+/// file again when it changes, so read a setting when you need it rather
+/// than once at activation.
+interface settings {
+  /// A setting's value. Tables and lists of other kinds come as TOML text.
+  variant value {
+    boolean(bool),
+    integer(s64),
+    float(f64),
+    text(string),
+    text-list(list<string>),
+    /// Anything else, as a TOML value (e.g. `{ a = 1 }`, `[1, 2]`).
+    toml(string),
+  }
+
+  /// The value of `key` in the plugin's table, or its default from
+  /// `plugin.toml`, or `none`. Keys may be dotted (`colors.overused`).
+  get: func(key: string) -> option<value>;
+
+  /// The keys set in the plugin's table, top level only.
+  keys: func() -> list<string>;
+}

@@ -1,0 +1,28 @@
+package prose:plugin@0.1.0;
+
+/// Telling the writer things and asking them things. Prose draws all of it in
+/// the current theme; plugins never draw.
+interface ui {
+  enum level {
+    info,
+    warning,
+    error,
+  }
+
+  /// Show a line in the status message area.
+  message: func(text: string, level: level);
+
+  /// Show a notification with buttons and wait for the writer. Returns the
+  /// index of the button they chose, or `none` if they dismissed it.
+  notify: func(text: string, level: level, buttons: list<string>) -> option<u32>;
+
+  /// Ask for a line of text. Returns `none` if the writer cancelled.
+  prompt-text: func(prompt: string, initial: option<string>) -> option<string>;
+
+  /// Ask the writer to pick one of `choices`. Returns its index, or `none`
+  /// if they cancelled.
+  prompt-choice: func(prompt: string, choices: list<string>) -> option<u32>;
+
+  /// Write to Prose's log, not the screen. For debugging.
+  log: func(level: level, text: string);
+}

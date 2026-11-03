@@ -1,0 +1,215 @@
+package prose:plugin@0.1.0;
+
+/// The shapes every other interface shares: positions, blocks and the edits
+/// a plugin sends back. They mirror Prose's document model, so an edit from a
+/// plugin goes down the same path as typing.
+interface types {
+  /// A block's id. Opaque: compare and pass it back, never parse it. Ids are
+  /// unique within a document and stay with a block across edits.
+  type block-id = string;
+
+  /// An annotation's id, opaque like a block id.
+  type annotation-id = string;
+
+  /// A point in a document: a block and a byte offset into its UTF-8 text.
+  /// Offsets must fall on character boundaries.
+  record position {
+    block: block-id,
+    offset: u32,
+  }
+
+  /// From `start` to `end`, in document order. May span blocks.
+  record span {
+    start: position,
+    end: position,
+  }
+
+  /// A selection. `anchor` is where it started and `head` where the caret
+  /// is, so `head` may come before `anchor`. Equal for a bare caret.
+  record selection {
+    anchor: position,
+    head: position,
+  }
+
+  /// Character formatting.
+  flags marks {
+    bold,
+    italic,
+    underline,
+    strikethrough,
+    small-caps,
+    superscript,
+    subscript,
+    code,
+  }
+
+  /// A stretch of a block's text with one format. A block's runs cover its
+  /// text exactly, in order.
+  record run {
+    /// Length in bytes.
+    len: u32,
+    marks: marks,
+    /// A character style from the project's style sheet, if any.
+    style: option<u32>,
+  }
+
+  enum list-marker {
+    bullet,
+    ordered,
+  }
+
+  record list-item {
+    marker: list-marker,
+    /// Nesting below the outermost list, from 0.
+    depth: u8,
+  }
+
+  /// What a block is. Its text is its content, except as noted.
+  variant block-kind {
+    paragraph,
+    /// Level 1 to 6.
+    heading(u8),
+    block-quote,
+    list-item(list-item),
+    /// A break between scenes. Its text is empty.
+    scene-break,
+    /// An image on its own line; its text is the caption. Plugins can read
+    /// image blocks but not create them in 0.1.
+    image,
+    /// Content Prose keeps verbatim (a table, raw HTML from an import); its
+    /// text is the source.
+    raw,
+  }
+
+  enum highlight-color {
+    yellow,
+    green,
+    blue,
+    pink,
+  }
+
+  variant annotation-kind {
+    /// A writer's note on a range of text.
+    comment,
+    /// A footnote reference, at a point (an empty range).
+    footnote,
+    /// A link to a URL, or `prose:<document id>` for another document.
+    link(string),
+    highlight(highlight-color),
+  }
+
+  /// An annotation on part of one block.
+  record annotation {
+    id: annotation-id,
+    /// Byte range in the block's text.
+    start: u32,
+    end: u32,
+    kind: annotation-kind,
+  }
+
+  /// One paragraph-level unit of a document.
+  record block {
+    id: block-id,
+    kind: block-kind,
+    text: string,
+    runs: list<run>,
+    annotations: list<annotation>,
+  }
+
+  /// A block to insert. Leave `runs` empty for plain text.
+  record new-block {
+    /// From `documents.new-id`.
+    id: block-id,
+    kind: block-kind,
+    text: string,
+    runs: list<run>,
+  }
+
+  /// One change to a document. Ops apply in order, each to the document as
+  /// the ops before it left it.
+  variant op {
+    /// Replace everything in `span` with `text`, where `\n` starts a new
+    /// paragraph. The easy way to type, delete or rewrite text. New text
+    /// takes the format typing at the start of the span would give.
+    replace-text(replace-text),
+    /// Replace a byte range inside one block, optionally with formatting.
+    replace(replace),
+    /// Turn marks on or off over a byte range of one block.
+    set-marks(set-marks),
+    set-block-kind(set-block-kind),
+    /// Break a block at a byte offset; the text after it becomes a new block.
+    split(split),
+    /// Join the block after this one onto it.
+    join(block-id),
+    insert-blocks(insert-blocks),
+    remove-blocks(remove-blocks),
+    annotate(annotate),
+    remove-annotation(remove-annotation),
+  }
+
+  record replace-text {
+    span: span,
+    text: string,
+  }
+
+  record replace {
+    block: block-id,
+    start: u32,
+    end: u32,
+    text: string,
+    /// If given, the runs of the new text, covering it exactly. If not, it
+    /// takes the format typing at `start` would give.
+    runs: option<list<run>>,
+  }
+
+  record set-marks {
+    block: block-id,
+    start: u32,
+    end: u32,
+    marks: marks,
+    on: bool,
+  }
+
+  record set-block-kind {
+    block: block-id,
+    kind: block-kind,
+  }
+
+  record split {
+    block: block-id,
+    offset: u32,
+    /// From `documents.new-id`.
+    new-block: block-id,
+  }
+
+  record insert-blocks {
+    /// Insert after this block, or first in the document if none.
+    after: option<block-id>,
+    blocks: list<new-block>,
+  }
+
+  record remove-blocks {
+    first: block-id,
+    count: u32,
+  }
+
+  record annotate {
+    block: block-id,
+    annotation: annotation,
+  }
+
+  record remove-annotation {
+    block: block-id,
+    id: annotation-id,
+  }
+
+  /// Ops applied together as one edit and one undo step.
+  record transaction {
+    /// The document version the plugin read before building the ops
+    /// (`document.version`). If the document has moved on since, the edit is
+    /// refused with `edit-error::stale` and the plugin should read again and
+    /// retry. Prose never rebases a plugin's edit.
+    base-version: u64,
+    ops: list<op>,
+  }
+}

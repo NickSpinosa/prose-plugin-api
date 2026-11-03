@@ -1,0 +1,50 @@
+package prose:plugin@0.1.0;
+
+/// Adding commands. A plugin command joins Prose's own: it shows in the `:`
+/// line with completion, the command palette, the menu search and the
+/// Shortcuts settings page, and the writer binds it in `keymap.toml` as
+/// `<plugin id>.<name>`, in both vim and non-vim mode.
+interface commands {
+  /// What a command takes after its name on the `:` line.
+  variant argument {
+    /// Nothing.
+    none,
+    /// Free text: everything after the name, as one argument.
+    text,
+    /// A document, completed from the binder's titles. Prose passes its id.
+    document,
+    /// One of these words, completed on the `:` line.
+    choice(list<string>),
+  }
+
+  record command {
+    /// Lowercase words joined with `_`, unique within the plugin, e.g.
+    /// `top_words`. The full id is `<plugin id>.<name>`.
+    name: string,
+    /// Shown in the palette and on the Shortcuts page, e.g. "Top words".
+    title: string,
+    /// One line on what it does, for the palette and `:help`.
+    description: string,
+    /// Names on the `:` line. Each must start with a capital letter so it
+    /// never clashes with a built-in, e.g. `WordFreq`.
+    ex-names: list<string>,
+    argument: argument,
+    /// Keys the plugin suggests, in `keymap.toml` syntax (e.g.
+    /// `secondary-k secondary-f`). Used only where the writer has bound
+    /// nothing else; the writer's `keymap.toml` always wins.
+    suggested-keys: list<string>,
+  }
+
+  /// Why a command was not registered.
+  variant register-error {
+    /// The name or an ex name is not valid.
+    bad-name(string),
+    /// The plugin already has a command with this name, or an ex name is
+    /// taken by another plugin.
+    taken(string),
+  }
+
+  /// Add a command. Call it from `activate`; Prose calls `run-command` with
+  /// the command's `name` when the writer runs it.
+  register: func(command: command) -> result<_, register-error>;
+}

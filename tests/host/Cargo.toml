@@ -1,0 +1,11 @@
+[package]
+name = "host-test"
+description = "Loads the example plugins in Wasmtime against a fake Prose, to test the WIT and the SDK end to end"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+wasmtime = { version = "50", default-features = false, features = ["runtime", "cranelift", "component-model", "std"] }
+wasmtime-wasi = { version = "50", default-features = false, features = ["p2"] }

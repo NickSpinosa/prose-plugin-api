@@ -1,0 +1,341 @@
+//! A fake Prose: just enough host to load a plugin component in Wasmtime,
+//! run its commands against an in-memory document and see what it did. It
+//! tests the WIT and the SDK end to end; it is not how Prose implements the
+//! host, and it is not published.
+
+use std::collections::HashMap;
+
+use wasmtime::Result;
+use wasmtime::component::{Component, HasSelf, Linker, Resource, ResourceTable};
+use wasmtime::{Engine, Store};
+use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
+
+wasmtime::component::bindgen!({
+    path: "../../wit/v0.1.0",
+    world: "prose:plugin/plugin@0.1.0",
+    with: {
+        "prose:plugin/documents.document": DocHandle,
+    },
+    imports: { default: trappable },
+});
+
+pub use prose::plugin::types::{Block, BlockKind};
+pub use prose::plugin::ui::Level;
+use prose::plugin::{commands, documents, edits, settings, types, ui};
+
+/// A handle the plugin holds on the one fake document.
+pub struct DocHandle;
+
+/// The fake document.
+#[derive(Clone, Debug, Default)]
+pub struct Doc {
+    pub id: String,
+    pub title: String,
+    pub version: u64,
+    pub blocks: Vec<Block>,
+    pub selection: Option<types::Selection>,
+}
+
+impl Doc {
+    /// A document of plain paragraphs with ids `b0`, `b1`, ...
+    pub fn paragraphs(texts: &[&str]) -> Doc {
+        Doc {
+            id: "doc-1".into(),
+            title: "Chapter One".into(),
+            version: 1,
+            blocks: texts
+                .iter()
+                .enumerate()
+                .map(|(i, t)| Block {
+                    id: format!("b{i}"),
+                    kind: BlockKind::Paragraph,
+                    text: t.to_string(),
+                    runs: Vec::new(),
+                    annotations: Vec::new(),
+                })
+                .collect(),
+            selection: None,
+        }
+    }
+
+    fn index(&self, id: &str) -> Option<usize> {
+        self.blocks.iter().position(|b| b.id == id)
+    }
+
+    /// Applies the ops this fake understands: `replace` and `replace-text`
+    /// within one block. Enough for the examples.
+    fn apply(&mut self, ops: &[Op]) -> std::result::Result<(), edits::EditError> {
+        let mut blocks = self.blocks.clone();
+        for (index, op) in ops.iter().enumerate() {
+            let bad = |message: &str| {
+                edits::EditError::InvalidOp(edits::InvalidOp {
+                    index: index as u32,
+                    message: message.into(),
+                })
+            };
+            let (block, start, end, text) = match op {
+                Op::Replace(r) => (&r.block, r.start, r.end, &r.text),
+                Op::ReplaceText(r) if r.span.start.block == r.span.end.block => (
+                    &r.span.start.block,
+                    r.span.start.offset,
+                    r.span.end.offset,
+                    &r.text,
+                ),
+                _ => return Err(bad("not supported by the test host")),
+            };
+            let b = blocks
+                .iter_mut()
+                .find(|b| &b.id == block)
+                .ok_or_else(|| bad("no such block"))?;
+            let (start, end) = (start as usize, end as usize);
+            if start > end
+                || end > b.text.len()
+                || !b.text.is_char_boundary(start)
+                || !b.text.is_char_boundary(end)
+            {
+                return Err(bad("out of bounds"));
+            }
+            b.text.replace_range(start..end, text);
+        }
+        self.blocks = blocks;
+        self.version += 1;
+        Ok(())
+    }
+}
+
+/// Everything the fake records.
+#[derive(Default)]
+pub struct Prose {
+    pub doc: Doc,
+    /// Whether `current()` returns the document (true while a command with a
+    /// document runs).
+    pub in_command: bool,
+    pub commands: Vec<commands::Command>,
+    pub messages: Vec<(String, Level)>,
+    pub log: Vec<String>,
+    pub settings: HashMap<String, settings::Value>,
+    /// Bumps the document's version once, before the next apply, as if the
+    /// writer typed while the plugin worked.
+    pub writer_types_once: bool,
+    pub undo_steps: usize,
+    pub next_id: u32,
+    pub table: ResourceTable,
+    pub wasi: WasiCtx,
+}
+
+impl WasiView for Prose {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
+    }
+}
+
+impl types::Host for Prose {}
+
+impl documents::Host for Prose {
+    fn current(&mut self) -> wasmtime::Result<Option<Resource<DocHandle>>> {
+        if !self.in_command {
+            return Ok(None);
+        }
+        Ok(Some(self.table.push(DocHandle)?))
+    }
+
+    fn new_id(&mut self) -> wasmtime::Result<String> {
+        self.next_id += 1;
+        Ok(format!("new-{}", self.next_id))
+    }
+}
+
+impl documents::HostDocument for Prose {
+    fn id(&mut self, _: Resource<DocHandle>) -> wasmtime::Result<String> {
+        Ok(self.doc.id.clone())
+    }
+    fn title(&mut self, _: Resource<DocHandle>) -> wasmtime::Result<String> {
+        Ok(self.doc.title.clone())
+    }
+    fn version(&mut self, _: Resource<DocHandle>) -> wasmtime::Result<u64> {
+        Ok(self.doc.version)
+    }
+    fn block_count(&mut self, _: Resource<DocHandle>) -> wasmtime::Result<u32> {
+        Ok(self.doc.blocks.len() as u32)
+    }
+    fn blocks(
+        &mut self,
+        _: Resource<DocHandle>,
+        start: u32,
+        count: u32,
+    ) -> wasmtime::Result<Vec<Block>> {
+        Ok(self
+            .doc
+            .blocks
+            .iter()
+            .skip(start as usize)
+            .take(count as usize)
+            .cloned()
+            .collect())
+    }
+    fn block(&mut self, _: Resource<DocHandle>, id: String) -> wasmtime::Result<Option<Block>> {
+        Ok(self.doc.index(&id).map(|i| self.doc.blocks[i].clone()))
+    }
+    fn block_index(&mut self, _: Resource<DocHandle>, id: String) -> wasmtime::Result<Option<u32>> {
+        Ok(self.doc.index(&id).map(|i| i as u32))
+    }
+    fn word_count(&mut self, _: Resource<DocHandle>) -> wasmtime::Result<u32> {
+        Ok(self
+            .doc
+            .blocks
+            .iter()
+            .map(|b| b.text.split_whitespace().count() as u32)
+            .sum())
+    }
+    fn selection(&mut self, _: Resource<DocHandle>) -> wasmtime::Result<Option<types::Selection>> {
+        Ok(self.doc.selection.clone())
+    }
+    fn drop(&mut self, handle: Resource<DocHandle>) -> wasmtime::Result<()> {
+        self.table.delete(handle)?;
+        Ok(())
+    }
+}
+
+impl edits::Host for Prose {
+    fn apply(
+        &mut self,
+        _: Resource<DocHandle>,
+        edit: types::Transaction,
+    ) -> wasmtime::Result<std::result::Result<u64, edits::EditError>> {
+        if std::mem::take(&mut self.writer_types_once) {
+            self.doc.version += 1;
+        }
+        if edit.base_version != self.doc.version {
+            return Ok(Err(edits::EditError::Stale));
+        }
+        Ok(self.doc.apply(&edit.ops).map(|()| {
+            self.undo_steps += 1;
+            self.doc.version
+        }))
+    }
+}
+
+impl commands::Host for Prose {
+    fn register(
+        &mut self,
+        command: commands::Command,
+    ) -> wasmtime::Result<std::result::Result<(), commands::RegisterError>> {
+        if self.commands.iter().any(|c| c.name == command.name) {
+            return Ok(Err(commands::RegisterError::Taken(command.name)));
+        }
+        if let Some(bad) = command
+            .ex_names
+            .iter()
+            .find(|n| !n.starts_with(|c: char| c.is_ascii_uppercase()))
+        {
+            return Ok(Err(commands::RegisterError::BadName(bad.clone())));
+        }
+        self.commands.push(command);
+        Ok(Ok(()))
+    }
+}
+
+impl ui::Host for Prose {
+    fn message(&mut self, text: String, level: Level) -> wasmtime::Result<()> {
+        self.messages.push((text, level));
+        Ok(())
+    }
+    fn notify(
+        &mut self,
+        text: String,
+        level: Level,
+        _buttons: Vec<String>,
+    ) -> wasmtime::Result<Option<u32>> {
+        self.messages.push((text, level));
+        Ok(Some(0))
+    }
+    fn prompt_text(
+        &mut self,
+        _prompt: String,
+        initial: Option<String>,
+    ) -> wasmtime::Result<Option<String>> {
+        Ok(initial)
+    }
+    fn prompt_choice(
+        &mut self,
+        _prompt: String,
+        _choices: Vec<String>,
+    ) -> wasmtime::Result<Option<u32>> {
+        Ok(Some(0))
+    }
+    fn log(&mut self, _level: Level, text: String) -> wasmtime::Result<()> {
+        self.log.push(text);
+        Ok(())
+    }
+}
+
+impl settings::Host for Prose {
+    fn get(&mut self, key: String) -> wasmtime::Result<Option<settings::Value>> {
+        Ok(self.settings.get(&key).cloned())
+    }
+    fn keys(&mut self) -> wasmtime::Result<Vec<String>> {
+        Ok(self.settings.keys().cloned().collect())
+    }
+}
+
+/// What a plugin is granted, for linking.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Grants {
+    pub edit_documents: bool,
+}
+
+/// A loaded plugin and its fake Prose.
+pub struct Loaded {
+    pub store: Store<Prose>,
+    pub plugin: Plugin,
+}
+
+/// Loads the component in `wasm`, linking only what `grants` allows, as
+/// Prose does, and calls `activate`.
+pub fn load(wasm: &[u8], grants: Grants, prose: Prose) -> Result<Loaded> {
+    let engine = Engine::default();
+    let component = Component::new(&engine, wasm)?;
+    let mut linker: Linker<Prose> = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+    types::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    documents::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    commands::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    ui::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    settings::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    if grants.edit_documents {
+        edits::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    }
+    let mut store = Store::new(&engine, prose);
+    let plugin = Plugin::instantiate(&mut store, &component, &linker)?;
+    plugin
+        .call_activate(&mut store)?
+        .map_err(|e| wasmtime::Error::msg(format!("activate failed: {e}")))?;
+    Ok(Loaded { store, plugin })
+}
+
+impl Loaded {
+    /// Runs command `name` on the fake document, as the writer would.
+    pub fn run(&mut self, name: &str, args: &[&str]) -> Result<std::result::Result<(), String>> {
+        let doc = &self.store.data().doc;
+        let context = Context {
+            document: Some(doc.id.clone()),
+            selection: doc.selection.clone(),
+            span: None,
+            count: None,
+        };
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        self.store.data_mut().in_command = true;
+        let result = self
+            .plugin
+            .call_run_command(&mut self.store, name, &args, &context);
+        self.store.data_mut().in_command = false;
+        result
+    }
+
+    pub fn prose(&self) -> &Prose {
+        self.store.data()
+    }
+}
