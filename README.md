@@ -13,10 +13,11 @@ Prose's own source is not here. The WIT is the whole contract between Prose and 
 | Interface | What it gives | Permission |
 |---|---|---|
 | `commands` | Add commands. They show in the `:` line, the command palette and the Shortcuts settings, and writers bind them in `keymap.toml` as `<plugin id>.<command>`. | none |
-| `documents` | Read the document a command was run on: its blocks (text, formatting, kind, annotations), a page at a time, its selection and word count. | none |
-| `edits` | Change that document. Each `apply` is one undo step, so `u` undoes a whole plugin action. | `edit-documents` |
+| `documents` | Read the document a command was run on: its blocks (text, formatting, kind, annotations), a page at a time, its selection and word count, and UTF-16 offsets for languages that count strings that way. | none |
+| `edits` | Change that document. Everything one command or event applies is one undo step, so `u` undoes a whole plugin action. | `edit-documents` |
 | `ui` | Status messages, notifications with buttons, text and choice prompts, a log. | none |
 | `settings` | The plugin's own `[plugins.<id>]` table from the writer's `settings.toml`. | none |
+| `workspace` | The open project's name, the documents open in panes and the active one, and opening a document in a pane or a split. | none |
 
 Prose calls three functions the plugin exports: `activate` (register commands), `run-command`, and `on-event` (for the events the plugin's `plugin.toml` lists: document opened, saved or changed, idle, timers and so on).
 

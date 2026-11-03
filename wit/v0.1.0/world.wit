@@ -20,6 +20,7 @@ world plugin {
   import commands;
   import ui;
   import settings;
+  import workspace;
 
   use types.{selection, span, op};
 

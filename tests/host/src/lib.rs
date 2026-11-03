@@ -21,7 +21,7 @@ wasmtime::component::bindgen!({
 
 pub use prose::plugin::types::{Block, BlockKind};
 pub use prose::plugin::ui::Level;
-use prose::plugin::{commands, documents, edits, settings, types, ui};
+use prose::plugin::{commands, documents, edits, settings, types, ui, workspace};
 
 /// A handle the plugin holds on the one fake document.
 pub struct DocHandle;
@@ -193,6 +193,36 @@ impl documents::HostDocument for Prose {
     fn selection(&mut self, _: Resource<DocHandle>) -> wasmtime::Result<Option<types::Selection>> {
         Ok(self.doc.selection.clone())
     }
+    fn utf16_offset(
+        &mut self,
+        _: Resource<DocHandle>,
+        block: String,
+        offset: u32,
+    ) -> wasmtime::Result<Option<u32>> {
+        Ok(self.doc.index(&block).and_then(|i| {
+            let text = &self.doc.blocks[i].text;
+            let prefix = text.get(..offset as usize)?;
+            Some(prefix.encode_utf16().count() as u32)
+        }))
+    }
+    fn byte_offset(
+        &mut self,
+        _: Resource<DocHandle>,
+        block: String,
+        units: u32,
+    ) -> wasmtime::Result<Option<u32>> {
+        Ok(self.doc.index(&block).and_then(|i| {
+            let text = &self.doc.blocks[i].text;
+            let mut counted = 0;
+            for (byte, c) in text.char_indices() {
+                if counted == units {
+                    return Some(byte as u32);
+                }
+                counted += c.len_utf16() as u32;
+            }
+            (counted == units).then_some(text.len() as u32)
+        }))
+    }
     fn drop(&mut self, handle: Resource<DocHandle>) -> wasmtime::Result<()> {
         self.table.delete(handle)?;
         Ok(())
@@ -281,6 +311,33 @@ impl settings::Host for Prose {
     }
 }
 
+impl workspace::Host for Prose {
+    fn project_name(&mut self) -> wasmtime::Result<Option<String>> {
+        Ok(Some("The Lighthouse".into()))
+    }
+    fn open_documents(&mut self) -> wasmtime::Result<Vec<workspace::OpenDocument>> {
+        Ok(vec![workspace::OpenDocument {
+            id: self.doc.id.clone(),
+            title: self.doc.title.clone(),
+            active: true,
+        }])
+    }
+    fn active_document(&mut self) -> wasmtime::Result<Option<String>> {
+        Ok(Some(self.doc.id.clone()))
+    }
+    fn open(
+        &mut self,
+        document: String,
+        _placement: workspace::Placement,
+    ) -> wasmtime::Result<std::result::Result<(), workspace::OpenError>> {
+        if document == self.doc.id {
+            Ok(Ok(()))
+        } else {
+            Ok(Err(workspace::OpenError::NoSuchDocument))
+        }
+    }
+}
+
 /// What a plugin is granted, for linking.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Grants {
@@ -305,6 +362,7 @@ pub fn load(wasm: &[u8], grants: Grants, prose: Prose) -> Result<Loaded> {
     commands::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     ui::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     settings::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    workspace::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     if grants.edit_documents {
         edits::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     }
