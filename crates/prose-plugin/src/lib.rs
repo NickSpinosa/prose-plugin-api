@@ -92,6 +92,7 @@ pub mod bindings {
 pub mod binder;
 mod command;
 pub mod compile;
+pub mod decorations;
 mod document;
 pub mod history;
 mod lint;

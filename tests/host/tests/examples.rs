@@ -67,7 +67,7 @@ fn word_freq_lists_top_words() {
         .into(),
         ..Prose::default()
     };
-    let mut p = load(&wasm("word_freq"), Grants::default(), prose).unwrap();
+    let mut p = load(&wasm("word_freq"), edits(), prose).unwrap();
 
     let cmd = &p.prose().commands[0];
     assert_eq!(cmd.name, "top_words");
@@ -85,7 +85,7 @@ fn word_freq_lists_top_words() {
 fn word_freq_reports_a_bad_argument() {
     let mut p = load(
         &wasm("word_freq"),
-        Grants::default(),
+        edits(),
         Prose {
             doc: Doc::paragraphs(&["x"]),
             ..Prose::default()
@@ -104,7 +104,7 @@ fn word_freq_pages_through_a_long_document() {
     let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
     let mut p = load(
         &wasm("word_freq"),
-        Grants::default(),
+        edits(),
         Prose {
             doc: Doc::paragraphs(&refs),
             ..Prose::default()
@@ -115,10 +115,139 @@ fn word_freq_pages_through_a_long_document() {
     assert_eq!(messages(&p), ["Chapter One: common 1000"]);
 }
 
+/// WordFreq's grant: `:WordFreqFix` edits.
+fn edits() -> Grants {
+    Grants {
+        edit_documents: true,
+    }
+}
+
 #[test]
-fn word_freq_does_not_need_edits() {
-    // It never calls `edits`, so it loads with nothing granted.
-    assert!(load(&wasm("word_freq"), Grants::default(), Prose::default()).is_ok());
+fn word_freq_needs_edit_documents() {
+    // `:WordFreqFix` calls `edits`, so the component imports it and doesn't
+    // load without the grant.
+    let err = load(&wasm("word_freq"), Grants::default(), Prose::default())
+        .err()
+        .expect("must not load without edit-documents");
+    assert!(
+        format!("{err:?}").contains("prose:plugin/edits@0.1.0"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn word_freq_fix_deletes_doubled_words_in_one_undo_step() {
+    let prose = Prose {
+        doc: Doc::paragraphs(&[
+            "The the keeper climbed the the stairs.",
+            "Well, well. She had had enough of of it.",
+            "Nothing doubled here.",
+        ]),
+        settings: [(
+            "allow_doubled".to_string(),
+            Value::TextList(vec!["had".into()]),
+        )]
+        .into(),
+        ..Prose::default()
+    };
+    let mut p = load(&wasm("word_freq"), edits(), prose).unwrap();
+    let cmd = &p.prose().commands[1];
+    assert_eq!(cmd.name, "fix_doubled");
+    assert_eq!(cmd.ex_names, ["WordFreqFix"]);
+
+    p.run("fix_doubled", &[]).unwrap().unwrap();
+    let texts: Vec<_> = p
+        .prose()
+        .doc
+        .blocks
+        .iter()
+        .map(|b| b.text.as_str())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "The keeper climbed the stairs.",
+            "Well, well. She had had enough of it.",
+            "Nothing doubled here.",
+        ]
+    );
+    assert_eq!(p.prose().undo_steps, 1);
+    assert_eq!(messages(&p), ["Fixed 3 doubled words"]);
+
+    // Nothing left: no edit, no undo step.
+    p.run("fix_doubled", &[]).unwrap().unwrap();
+    assert_eq!(p.prose().undo_steps, 1);
+    assert_eq!(messages(&p)[1], "No doubled words");
+}
+
+#[test]
+fn word_freq_marks_and_clears_the_top_word() {
+    use host_test::Decoration;
+    use host_test::prose::plugin::decorations::Color;
+
+    let prose = Prose {
+        doc: Doc::paragraphs(&[
+            "Stairs and more stairs.",
+            "Nothing here.",
+            "The stairs again.",
+        ]),
+        ..Prose::default()
+    };
+    let mut p = load(&wasm("word_freq"), edits(), prose).unwrap();
+    p.run("mark_top", &[]).unwrap().unwrap();
+    assert_eq!(messages(&p), ["Marked stairs"]);
+
+    let marks = &p.prose().decorations["doc-1"];
+    let highlights: Vec<(String, u32, u32)> = marks
+        .iter()
+        .filter_map(|d| match d {
+            Decoration::Highlight(h) => {
+                assert_eq!(h.color, Color::Yellow);
+                Some((
+                    h.span.start.block.clone(),
+                    h.span.start.offset,
+                    h.span.end.offset,
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        highlights,
+        [
+            ("b0".to_string(), 0, 6),
+            ("b0".to_string(), 16, 22),
+            ("b2".to_string(), 4, 10),
+        ]
+    );
+    let margins: Vec<&str> = marks
+        .iter()
+        .filter_map(|d| match d {
+            Decoration::MarginMark(m) => Some(m.at.block.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(margins, ["b0", "b2"]);
+
+    p.run("clear_marks", &[]).unwrap().unwrap();
+    assert!(p.prose().decorations.is_empty());
+}
+
+#[test]
+fn word_freq_fix_retries_when_the_writer_typed() {
+    let mut p = load(
+        &wasm("word_freq"),
+        edits(),
+        Prose {
+            doc: Doc::paragraphs(&["at at last"]),
+            writer_types_once: true,
+            ..Prose::default()
+        },
+    )
+    .unwrap();
+    p.run("fix_doubled", &[]).unwrap().unwrap();
+    assert_eq!(p.prose().doc.blocks[0].text, "at last");
+    assert_eq!(p.prose().undo_steps, 1);
 }
 
 #[test]
@@ -223,7 +352,7 @@ fn smart_quotes_retries_when_the_writer_typed() {
 
 #[test]
 fn a_command_without_a_document_is_an_error() {
-    let mut p = load(&wasm("word_freq"), Grants::default(), Prose::default()).unwrap();
+    let mut p = load(&wasm("word_freq"), edits(), Prose::default()).unwrap();
     // Outside a command run on a document, `current()` gives none.
     let r = p.plugin.call_run_command(
         &mut p.store,
@@ -265,7 +394,7 @@ fn filter_words_lints_paragraphs() {
 
 #[test]
 fn a_plugin_without_the_export_has_no_lint() {
-    let p = load(&wasm("word_freq"), Grants::default(), Prose::default()).unwrap();
+    let p = load(&wasm("word_freq"), edits(), Prose::default()).unwrap();
     assert!(p.lint.is_none());
 }
 
@@ -294,7 +423,7 @@ fn smart_quotes_curls_quotes_in_a_compile() {
 
 #[test]
 fn word_freq_has_no_compile_hooks() {
-    let p = load(&wasm("word_freq"), Grants::default(), Prose::default()).unwrap();
+    let p = load(&wasm("word_freq"), edits(), Prose::default()).unwrap();
     assert!(p.compile.is_none());
 }
 

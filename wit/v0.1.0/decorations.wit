@@ -1,0 +1,102 @@
+package prose:plugin@0.1.0;
+
+/// Marking up the text the writer sees without changing it: highlights,
+/// underlines, marks in the margin and hints after a line, like Neovim's
+/// extmarks.
+///
+/// Each plugin has one set of decorations per document, its own, which it
+/// replaces or clears as a whole; no plugin sees or touches another's.
+/// Decorations move with the writer's edits the way comments do, and go
+/// when the text under them is deleted. They are never saved to the file,
+/// never put into history or undo, and are gone when the document closes, so
+/// set them again on `document-opened` if you need them back.
+///
+/// Prose draws them in the writer's theme, in every pane showing the
+/// document. Needs no permission.
+interface decorations {
+  use types.{span, position};
+
+  /// A colour from the writer's theme. Plugins name the colour's job, not
+  /// its value, so a decoration looks right in light and dark themes.
+  enum color {
+    /// The highlighter colours, as the theme draws highlights.
+    yellow,
+    green,
+    blue,
+    pink,
+    /// The theme's colour for spelling mistakes: something is wrong.
+    error,
+    /// The theme's colour for grammar problems: worth a look.
+    warning,
+    /// The theme's link colour.
+    accent,
+    /// Dimmed, like line numbers.
+    muted,
+  }
+
+  /// A background behind the text of `span`, which must not be empty.
+  record highlight {
+    span: span,
+    color: color,
+  }
+
+  /// A line under the text of `span`, which must not be empty: straight,
+  /// or wavy like a spelling squiggle.
+  record underline {
+    span: span,
+    color: color,
+    wavy: bool,
+  }
+
+  /// A short mark (one or two characters, such as `•` or `!`) in the
+  /// margin beside the line `at` is on.
+  record margin-mark {
+    at: position,
+    color: color,
+    text: string,
+  }
+
+  /// A line of text (at most 120 characters, no line breaks) drawn after
+  /// the end of the line `at` is on, smaller and dimmer than the writer's
+  /// text. It isn't part of the text: the caret skips it and it isn't
+  /// copied.
+  record hint {
+    at: position,
+    color: color,
+    text: string,
+  }
+
+  variant decoration {
+    highlight(highlight),
+    underline(underline),
+    margin-mark(margin-mark),
+    hint(hint),
+  }
+
+  /// Why decorations were refused. The plugin's decorations are as they
+  /// were in every case.
+  variant decoration-error {
+    /// The document changed after `version`. Read it again and retry.
+    stale,
+    /// The document isn't open.
+    gone,
+    /// Decoration `index` isn't valid (a missing block, an offset off a
+    /// character boundary, an empty span, text too long, ...).
+    invalid(invalid-decoration),
+  }
+
+  record invalid-decoration {
+    index: u32,
+    message: string,
+  }
+
+  /// Replace this plugin's decorations on document `document` (a binder id,
+  /// as events and `documents.document.id` give it) with `decorations`,
+  /// placed in the document as it was at `version`
+  /// (`documents.document.version`, or `document-changed.version`). An
+  /// empty list clears them. At most 10,000 decorations per document.
+  set: func(document: string, version: u64, decorations: list<decoration>) -> result<_, decoration-error>;
+
+  /// Remove this plugin's decorations from document `document`.
+  clear: func(document: string);
+}
