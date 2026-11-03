@@ -17,6 +17,14 @@ pub(crate) fn current() -> Option<Document> {
     documents::current().map(Document::from_raw)
 }
 
+impl From<documents::Document> for Document {
+    /// Wraps a handle from the generated bindings, such as the manuscript a
+    /// compile hook is given.
+    fn from(raw: documents::Document) -> Self {
+        Document { raw }
+    }
+}
+
 /// A fresh id for a block or annotation the plugin is about to create.
 pub fn new_id() -> String {
     documents::new_id()

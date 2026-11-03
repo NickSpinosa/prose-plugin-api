@@ -109,3 +109,10 @@ world linter {
   include plugin;
   export lint;
 }
+
+/// A plugin with compile and import hooks: everything `plugin` is, and the
+/// `compile` interface. Its `plugin.toml` needs the `compile` permission.
+world compile-plugin {
+  include plugin;
+  export compile;
+}

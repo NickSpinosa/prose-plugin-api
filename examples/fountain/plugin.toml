@@ -1,0 +1,20 @@
+id = "fountain"
+name = "Fountain"
+version = "0.1.0"
+api = "0.1.0"
+description = "Compiles to Fountain screenplays and imports .fountain files."
+authors = ["Prose"]
+license = "MIT OR Apache-2.0"
+permissions = ["compile"]
+events = []
+
+# A compile preset writes it with format = "fountain.fountain".
+[[export-format]]
+name = "fountain"
+title = "Fountain screenplay"
+extension = "fountain"
+
+[[import-format]]
+name = "fountain"
+title = "Fountain screenplay"
+extensions = ["fountain", "spmd"]

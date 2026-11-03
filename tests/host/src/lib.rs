@@ -42,6 +42,30 @@ pub mod linter {
 }
 
 pub use linter::exports::prose::plugin::lint::{Diagnostic, DiagnosticKind};
+
+/// The `compile` export of the `compile-plugin` world, for plugins with
+/// compile and import hooks. Its imports are the `plugin` world's.
+pub mod compile_plugin {
+    wasmtime::component::bindgen!({
+        path: "../../wit/v0.1.0",
+        world: "prose:plugin/compile-plugin@0.1.0",
+        with: {
+            "prose:plugin/types": super::prose::plugin::types,
+            "prose:plugin/documents": super::prose::plugin::documents,
+            "prose:plugin/edits": super::prose::plugin::edits,
+            "prose:plugin/commands": super::prose::plugin::commands,
+            "prose:plugin/ui": super::prose::plugin::ui,
+            "prose:plugin/settings": super::prose::plugin::settings,
+            "prose:plugin/workspace": super::prose::plugin::workspace,
+            "prose:plugin/project": super::prose::plugin::project,
+            "prose:plugin/history": super::prose::plugin::history,
+            "prose:plugin/binder": super::prose::plugin::binder,
+        },
+        imports: { default: trappable },
+    });
+}
+
+pub use compile_plugin::exports::prose::plugin::compile;
 pub use prose::plugin::types::{Block, BlockKind};
 pub use prose::plugin::ui::Level;
 use prose::plugin::{commands, documents, edits, settings, types, ui, workspace};
@@ -373,6 +397,8 @@ pub struct Loaded {
     pub plugin: Plugin,
     /// Its `lint` export, if it has one (it targets the `linter` world).
     pub lint: Option<linter::exports::prose::plugin::lint::Guest>,
+    /// Its compile hooks, if it exports them.
+    pub compile: Option<compile::Guest>,
 }
 
 /// Loads the component in `wasm`, linking only what `grants` allows, as
@@ -400,6 +426,10 @@ pub fn load(wasm: &[u8], grants: Grants, prose: Prose) -> Result<Loaded> {
         Ok(indices) => Some(indices.load(&mut store, &instance)?),
         Err(_) => None,
     };
+    let compile = match compile::GuestIndices::new(&pre) {
+        Ok(indices) => Some(indices.load(&mut store, &instance)?),
+        Err(_) => None,
+    };
     plugin
         .call_activate(&mut store)?
         .map_err(|e| wasmtime::Error::msg(format!("activate failed: {e}")))?;
@@ -407,6 +437,7 @@ pub fn load(wasm: &[u8], grants: Grants, prose: Prose) -> Result<Loaded> {
         store,
         plugin,
         lint,
+        compile,
     })
 }
 
@@ -436,6 +467,74 @@ impl Loaded {
             .as_ref()
             .ok_or_else(|| wasmtime::Error::msg("the plugin has no lint export"))?;
         lint.call_lint(&mut self.store, paragraph)
+    }
+
+    /// What compiling the fake document as the manuscript tells the
+    /// plugin.
+    pub fn info(&self, format: &str) -> compile::CompileInfo {
+        compile::CompileInfo {
+            preset: "Screenplay".into(),
+            format: format.into(),
+            title: self.prose().doc.title.clone(),
+            author: "Ada Lovelace".into(),
+            store: None,
+        }
+    }
+
+    fn manuscript(&mut self) -> Result<Resource<DocHandle>> {
+        Ok(self.store.data_mut().table.push(DocHandle)?)
+    }
+
+    fn hooks(&self) -> Result<&compile::Guest> {
+        self.compile
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("the plugin exports no compile hooks"))
+    }
+
+    /// Runs the plugin's compile transform on the fake document and
+    /// applies the ops it returns, as compile does.
+    pub fn transform(&mut self) -> Result<std::result::Result<(), String>> {
+        let info = self.info("docx");
+        let manuscript = self.manuscript()?;
+        let hooks = self.hooks()?.clone();
+        let ops = match hooks.call_transform(&mut self.store, &info, manuscript, &[])? {
+            Ok(ops) => ops,
+            Err(error) => return Ok(Err(error)),
+        };
+        Ok(self
+            .store
+            .data_mut()
+            .doc
+            .apply(&ops)
+            .map_err(|e| format!("{e:?}")))
+    }
+
+    /// Writes the fake document as the plugin's export format `format`.
+    pub fn export(
+        &mut self,
+        format: &str,
+        notes: &[compile::Note],
+    ) -> Result<std::result::Result<Vec<u8>, String>> {
+        let info = self.info(format);
+        let manuscript = self.manuscript()?;
+        let layout = compile::Layout {
+            body: None,
+            page: None,
+            paragraphs: Vec::new(),
+        };
+        let hooks = self.hooks()?.clone();
+        hooks.call_export_format(&mut self.store, format, &info, manuscript, notes, &layout)
+    }
+
+    /// Reads `bytes` as the plugin's import format `format`.
+    pub fn import(
+        &mut self,
+        format: &str,
+        file_name: &str,
+        bytes: &[u8],
+    ) -> Result<std::result::Result<Vec<compile::Imported>, String>> {
+        let hooks = self.hooks()?.clone();
+        hooks.call_import_format(&mut self.store, format, file_name, bytes)
     }
 
     pub fn prose(&self) -> &Prose {

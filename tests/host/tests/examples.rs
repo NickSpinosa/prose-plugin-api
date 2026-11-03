@@ -4,9 +4,12 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
+use host_test::compile::Note;
 use host_test::prose::plugin::settings::Value;
-use host_test::prose::plugin::types::{Position, Selection};
-use host_test::{DiagnosticKind, Doc, Grants, Level, Loaded, Prose, load};
+use host_test::prose::plugin::types::{
+    Annotation, AnnotationKind, Marks, Position, Run, Selection,
+};
+use host_test::{BlockKind, DiagnosticKind, Doc, Grants, Level, Loaded, Prose, load};
 
 /// Builds the examples once and returns the folder holding the `.wasm`s.
 fn wasm_dir() -> &'static PathBuf {
@@ -24,6 +27,8 @@ fn wasm_dir() -> &'static PathBuf {
                 "smart-quotes",
                 "-p",
                 "filter-words",
+                "-p",
+                "fountain",
             ])
             .env("CARGO_TARGET_DIR", &target)
             .status()
@@ -258,4 +263,174 @@ fn filter_words_lints_paragraphs() {
 fn a_plugin_without_the_export_has_no_lint() {
     let p = load(&wasm("word_freq"), Grants::default(), Prose::default()).unwrap();
     assert!(p.lint.is_none());
+}
+
+fn grants() -> Grants {
+    Grants {
+        edit_documents: true,
+    }
+}
+
+#[test]
+fn smart_quotes_curls_quotes_in_a_compile() {
+    let prose = Prose {
+        doc: Doc::paragraphs(&[r#""Don't," she said."#, "No quotes here."]),
+        ..Prose::default()
+    };
+    let mut p = load(&wasm("smart_quotes"), grants(), prose).unwrap();
+    p.transform().unwrap().unwrap();
+    assert_eq!(
+        p.prose().doc.blocks[0].text,
+        "\u{201C}Don\u{2019}t,\u{201D} she said."
+    );
+    assert_eq!(p.prose().doc.blocks[1].text, "No quotes here.");
+    // A transform hands its ops back: nothing is applied as an edit.
+    assert_eq!(p.prose().undo_steps, 0);
+}
+
+#[test]
+fn word_freq_has_no_compile_hooks() {
+    let p = load(&wasm("word_freq"), Grants::default(), Prose::default()).unwrap();
+    assert!(p.compile.is_none());
+}
+
+fn screenplay() -> Doc {
+    let mut doc = Doc::paragraphs(&[
+        "Act One",
+        "INT. LIGHTHOUSE - NIGHT",
+        "Rain hammers the glass. The lamp turns.",
+        "MARA: Who keeps the light now?",
+        "",
+        "THE END",
+    ]);
+    doc.title = "The Lighthouse".into();
+    doc.blocks[0].kind = BlockKind::Heading(1);
+    doc.blocks[4].kind = BlockKind::SceneBreak;
+    // "hammers" in italics.
+    doc.blocks[2].runs = vec![
+        run(5, Marks::empty()),
+        run(7, Marks::ITALIC),
+        run(27, Marks::empty()),
+    ];
+    doc
+}
+
+fn run(len: u32, marks: Marks) -> Run {
+    Run {
+        len,
+        marks,
+        style: None,
+    }
+}
+
+#[test]
+fn fountain_exports_a_screenplay() {
+    let prose = Prose {
+        doc: screenplay(),
+        ..Prose::default()
+    };
+    let mut p = load(&wasm("fountain"), Grants::default(), prose).unwrap();
+    let bytes = p.export("fountain", &[]).unwrap().unwrap();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "Title: The Lighthouse\n\
+         Credit: written by\n\
+         Author: Ada Lovelace\n\
+         \n\
+         # Act One\n\
+         \n\
+         INT. LIGHTHOUSE - NIGHT\n\
+         \n\
+         Rain *hammers* the glass. The lamp turns.\n\
+         \n\
+         MARA\n\
+         Who keeps the light now?\n\
+         \n\
+         ===\n\
+         \n\
+         !THE END\n\
+         \n"
+    );
+    assert!(p.export("pdf", &[]).unwrap().is_err());
+}
+
+#[test]
+fn fountain_writes_footnotes_as_notes() {
+    let mut doc = Doc::paragraphs(&["The lamp turns."]);
+    doc.blocks[0].annotations = vec![Annotation {
+        id: "n1".into(),
+        start: 8,
+        end: 8,
+        kind: AnnotationKind::Footnote,
+    }];
+    let prose = Prose {
+        doc,
+        ..Prose::default()
+    };
+    let mut p = load(&wasm("fountain"), Grants::default(), prose).unwrap();
+    let notes = [Note {
+        id: "n1".into(),
+        blocks: Doc::paragraphs(&["A Fresnel lens."]).blocks,
+    }];
+    let bytes = p.export("fountain", &notes).unwrap().unwrap();
+    let script = String::from_utf8(bytes).unwrap();
+    assert!(
+        script.ends_with("The lamp[[A Fresnel lens.]] turns.\n\n"),
+        "{script}"
+    );
+}
+
+#[test]
+fn fountain_imports_a_document_per_section() {
+    let mut p = load(&wasm("fountain"), Grants::default(), Prose::default()).unwrap();
+    let script = "Title: The Lighthouse\n\
+                  Author: Ada\n\
+                  \n\
+                  # Act One\n\
+                  = Mara arrives.\n\
+                  \n\
+                  INT. LIGHTHOUSE - NIGHT\n\
+                  \n\
+                  Rain **hammers** the glass.\n\
+                  \n\
+                  MARA\n\
+                  Who keeps\n\
+                  the light now?\n\
+                  \n\
+                  ===\n\
+                  \n\
+                  # Act Two\n\
+                  \n\
+                  ## Morning\n\
+                  \n\
+                  !THE END\n";
+    let docs = p
+        .import("fountain", "lighthouse.fountain", script.as_bytes())
+        .unwrap()
+        .unwrap();
+    let titles: Vec<&str> = docs.iter().map(|d| d.title.as_str()).collect();
+    assert_eq!(titles, ["Act One", "Act Two"]);
+    assert_eq!(docs[0].synopsis, "Mara arrives.");
+    let texts: Vec<&str> = docs[0].blocks.iter().map(|b| b.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        [
+            "INT. LIGHTHOUSE - NIGHT",
+            "Rain hammers the glass.",
+            "MARA: Who keeps the light now?",
+            "",
+        ]
+    );
+    let bold = &docs[0].blocks[1].runs[1];
+    assert_eq!((bold.len, bold.marks), (7, Marks::BOLD));
+    assert!(matches!(docs[0].blocks[3].kind, BlockKind::SceneBreak));
+    assert!(matches!(docs[1].blocks[0].kind, BlockKind::Heading(2)));
+    assert_eq!(docs[1].blocks[1].text, "THE END");
+
+    let untitled = p
+        .import("fountain", "draft.fountain", b"FADE IN:\n\nA beach.\n")
+        .unwrap()
+        .unwrap();
+    assert_eq!(untitled[0].title, "draft");
+    assert!(p.import("fdx", "x.fdx", b"").unwrap().is_err());
 }
