@@ -1,6 +1,6 @@
 # Prose plugin API
 
-Everything you need to write a plugin for Prose, the writing app: the API, written in [WIT](https://component-model.bytecodealliance.org/design/wit.html), a Rust SDK, a project template and three example plugins.
+Everything you need to write a plugin for Prose, the writing app: the API, written in [WIT](https://component-model.bytecodealliance.org/design/wit.html), a Rust SDK, a project template and example plugins.
 
 A Prose plugin is a WebAssembly component plus a `plugin.toml`. Because the API is WIT, a plugin can be written in any language that builds components (Rust, C, Go, JavaScript, Python, C#). This repository's SDK is for Rust; for other languages, generate bindings from [`wit/v0.1.0`](wit/v0.1.0) with your language's tool.
 
@@ -15,7 +15,7 @@ Prose's own source is not here. The WIT is the whole contract between Prose and 
 | `commands` | Add commands. They show in the `:` line, the command palette and the Shortcuts settings, and writers bind them in `keymap.toml` as `<plugin id>.<command>`. | none |
 | `documents` | Read the document a command was run on: its blocks (text, formatting, kind, annotations), a page at a time, its selection and word count, and UTF-16 offsets for languages that count strings that way. | none |
 | `edits` | Change that document. Everything one command or event applies is one undo step, so `u` undoes a whole plugin action. | `edit-documents` |
-| `ui` | Status messages, notifications with buttons, text and choice prompts, a log. | none |
+| `ui` | Status messages, notifications with buttons, text and choice prompts, pickers (a list the writer filters by typing, drawn by the command palette or, with previews, quick open's finder), a log. | none |
 | `settings` | The plugin's own `[plugins.<id>]` table from the writer's `settings.toml`. | none |
 | `workspace` | The open project's name, the documents open in panes and the active one, and opening a document in a pane or a split. | none |
 | `project` | The whole project: the binder and every item's metadata (synopsis, label, status, keywords, target, custom fields) and notes, any document's text, project search, word counts, the session's words and the words written each day. | `read-project` |
@@ -27,7 +27,7 @@ Prose's own source is not here. The WIT is the whole contract between Prose and 
 
 Prose calls three functions the plugin exports: `activate` (register commands), `run-command`, and `on-event` (for the events the plugin's `plugin.toml` lists: document opened, saved or changed, idle, timers and so on). A plugin may export more, for what only some plugins do: the `linter` world adds the `lint` interface (below), and Prose calls it only on a plugin that exports it.
 
-Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers and panels.
+Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add panels.
 
 ### Permissions
 
@@ -235,6 +235,8 @@ prose_plugin::export!(NoVery, lint);
 
 Ranges are byte offsets into the paragraph; an empty suggestion deletes the range. Each call runs under the event deadline (50 ms by default). The writer turns a plugin's checks off with `lint = false` in its `[plugins.<id>]` table, or from the menu on one of its squiggles.
 
+### Decorations
+
 Decorations mark up the text without changing it. Collect them and show them; each call replaces the plugin's decorations on that document:
 
 ```rust
@@ -252,11 +254,33 @@ marks.show(&doc).map_err(|e| e.to_string())?;
 
 Like edits, they are placed against the version you read, and refused as stale if the writer typed since. They follow the writer's edits after that, and are gone when the document closes.
 
+### Pickers
+
+A picker is a list the writer filters by typing, with the command palette's fuzzy matching and keys (vim's normal mode too). Each item has a title, an optional detail beside it, and an optional preview: give any item a preview and Prose draws the picker as quick open's finder, with the selected item's preview beside the list. A long list can stream in while the writer looks:
+
+```rust
+use prose_plugin::ui::{self, PickItem};
+
+let picker = ui::open_picker("Pick a name", &first_batch);
+for batch in rest {
+    if !picker.add(&batch) {
+        break; // the writer already chose, or closed it
+    }
+}
+if let Some(picked) = picker.wait() {
+    // picked.index counts every item added; picked.how is Enter, or
+    // Ctrl-V / Ctrl-X for "in a split"
+}
+```
+
+`ui::pick(title, items)` does it in one call for a short list. Waiting for the writer doesn't count against the command's deadline; building the list does.
+
 ### Examples
 
 - [`examples/word-freq`](examples/word-freq): `:WordFreq [n]` lists the most used words in the document, and `:WordFreqFix` deletes doubled words ("the the") as one undo step, leaving the ones in its `allow_doubled` setting ("had had"). `:WordFreqMark [n]` highlights every use of the top words with a mark in the margin, and `:WordFreqClear` takes the highlights away. Needs `edit-documents`.
 - [`examples/smart-quotes`](examples/smart-quotes): `:SmartQuotes` curls straight quotes in the selection or the whole document, as one undo step, and curls every compile's quotes as a compile transform. Needs `edit-documents` and `compile`.
 - [`examples/filter-words`](examples/filter-words): underlines filter words ("just", "really", "suddenly") and offers to cut them, leaving dialogue alone unless asked. Exports `lint`; the words are a setting.
+- [`examples/names`](examples/names): `:Name` streams 2,000 generated character names into a picker, each with its origin and a line of dialogue as its preview, and puts the chosen one at the caret. Needs `edit-documents`.
 - [`examples/fountain`](examples/fountain): compiles the book to a [Fountain](https://fountain.io) screenplay and imports `.fountain` files, a document per top-level section. Needs `compile`.
 
 ### Compile and import hooks

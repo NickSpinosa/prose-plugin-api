@@ -23,6 +23,61 @@ interface ui {
   /// if they cancelled.
   prompt-choice: func(prompt: string, choices: list<string>) -> option<u32>;
 
+  /// One thing a picker lists.
+  record pick-item {
+    /// What the list shows. Typing matches it first.
+    title: string,
+    /// A fainter line beside the title (a folder, a count). Typing
+    /// matches it too.
+    detail: option<string>,
+    /// Text shown beside the list while the item is selected, a
+    /// paragraph per line. A picker with any previews is drawn as quick
+    /// open's finder, with the preview beside the list.
+    preview: option<string>,
+  }
+
+  /// How the writer chose an item. Ctrl-V and Ctrl-X are quick open's
+  /// "in a split" keys; a plugin that has nothing to split may treat them
+  /// as Enter.
+  enum pick-how {
+    /// Enter.
+    enter,
+    /// Ctrl-V: wanted in a split to the right.
+    split-right,
+    /// Ctrl-X: wanted in a split below.
+    split-down,
+  }
+
+  /// The writer's choice in a picker.
+  record picked {
+    /// The item's index, counting every item added, in the order added.
+    index: u32,
+    how: pick-how,
+  }
+
+  /// A picker on screen: a list the writer filters by typing, drawn by
+  /// the command palette, or by quick open's finder when items have
+  /// previews, with the same fuzzy matching and the same keys (vim's
+  /// normal mode included). Dropping it closes it.
+  resource picker {
+    /// Add `items` at the end of the list while it shows, so a long list
+    /// can stream in. Returns `false` once the writer has closed the
+    /// picker (chosen, dismissed, or opened something else over it): stop
+    /// adding then.
+    add: func(items: list<pick-item>) -> bool;
+
+    /// The list is complete: wait for the writer's choice. Returns `none`
+    /// if they dismissed the picker. The picker is closed afterwards, and
+    /// waiting again returns `none`.
+    wait: func() -> option<picked>;
+  }
+
+  /// Show a picker of `items` and go on: add more with `picker.add`, then
+  /// `picker.wait` for the choice. `title` reads in the empty query
+  /// ("Pick a name"). One picker or prompt shows at a time; a new one
+  /// closes the one before.
+  open-picker: func(title: string, items: list<pick-item>) -> picker;
+
   /// Write to Prose's log, not the screen. For debugging.
   log: func(level: level, text: string);
 }

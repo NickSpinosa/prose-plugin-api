@@ -9,7 +9,9 @@ use host_test::prose::plugin::settings::Value;
 use host_test::prose::plugin::types::{
     Annotation, AnnotationKind, Marks, Position, Run, Selection,
 };
-use host_test::{BlockKind, DiagnosticKind, Doc, Grants, Level, Loaded, Prose, load};
+use host_test::{
+    BlockKind, DiagnosticKind, Doc, Grants, Level, Loaded, PickHow, Picked, Prose, load,
+};
 
 /// Builds the examples once and returns the folder holding the `.wasm`s.
 fn wasm_dir() -> &'static PathBuf {
@@ -29,6 +31,8 @@ fn wasm_dir() -> &'static PathBuf {
                 "filter-words",
                 "-p",
                 "fountain",
+                "-p",
+                "names",
             ])
             .env("CARGO_TARGET_DIR", &target)
             .status()
@@ -562,4 +566,90 @@ fn fountain_imports_a_document_per_section() {
         .unwrap();
     assert_eq!(untitled[0].title, "draft");
     assert!(p.import("fdx", "x.fdx", b"").unwrap().is_err());
+}
+
+fn caret(block: &str, offset: u32) -> Option<Selection> {
+    let at = Position {
+        block: block.into(),
+        offset,
+    };
+    Some(Selection {
+        anchor: at.clone(),
+        head: at,
+    })
+}
+
+fn names(prose: Prose) -> Loaded {
+    load(
+        &wasm("names"),
+        Grants {
+            edit_documents: true,
+        },
+        prose,
+    )
+    .unwrap()
+}
+
+#[test]
+fn names_streams_its_list_and_inserts_the_choice_at_the_caret() {
+    let mut doc = Doc::paragraphs(&["Her name was ."]);
+    doc.selection = caret("b0", 13);
+    let mut p = names(Prose {
+        doc,
+        pick: Some(Picked {
+            index: 1,
+            how: PickHow::Enter,
+        }),
+        ..Prose::default()
+    });
+    p.run("name", &[]).unwrap().unwrap();
+    let picker = &p.prose().pickers[0];
+    assert_eq!(picker.title, "Pick a name");
+    // 2,000 names by default: a first batch, then the rest added.
+    assert_eq!(picker.items.len(), 2000);
+    assert!(picker.adds > 0);
+    assert!(picker.waited && picker.dropped);
+    assert_eq!(picker.items[1].detail.as_deref(), Some("Greek"));
+    assert!(picker.items[1].preview.is_some());
+    let chosen = picker.items[1].title.clone();
+    assert_eq!(
+        p.prose().doc.blocks[0].text,
+        format!("Her name was {chosen}.")
+    );
+    assert_eq!(p.prose().undo_steps, 1);
+}
+
+#[test]
+fn names_stops_adding_once_the_writer_chose() {
+    let mut doc = Doc::paragraphs(&["x"]);
+    doc.selection = caret("b0", 0);
+    let mut p = names(Prose {
+        doc,
+        close_after: Some(250),
+        pick: Some(Picked {
+            index: 0,
+            how: PickHow::SplitRight,
+        }),
+        ..Prose::default()
+    });
+    p.run("name", &[]).unwrap().unwrap();
+    let picker = &p.prose().pickers[0];
+    assert_eq!(picker.items.len(), 250);
+    assert_eq!(picker.adds, 0);
+    // A split means nothing here: it inserts all the same.
+    let chosen = picker.items[0].title.clone();
+    assert_eq!(p.prose().doc.blocks[0].text, format!("{chosen}x"));
+}
+
+#[test]
+fn names_does_nothing_when_dismissed() {
+    let mut doc = Doc::paragraphs(&["x"]);
+    doc.selection = caret("b0", 0);
+    let mut p = names(Prose {
+        doc,
+        ..Prose::default()
+    });
+    p.run("name", &[]).unwrap().unwrap();
+    assert_eq!(p.prose().doc.blocks[0].text, "x");
+    assert_eq!(p.prose().undo_steps, 0);
 }
