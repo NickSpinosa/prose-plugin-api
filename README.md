@@ -23,6 +23,7 @@ Prose's own source is not here. The WIT is the whole contract between Prose and 
 | `binder` | Making, retitling, moving, duplicating and trashing binder items, setting their metadata and custom fields, and replacing text across the project. Each call is one change the writer can undo from the binder; nothing empties the trash. | `edit-binder` |
 | `lint` (an export) | Check paragraphs: what the plugin finds is underlined and offered in the same menu as Prose's own spelling and grammar problems. | none |
 | `compile` (exported) | Hooks Prose calls: change the manuscript every compile makes, write a new export format, read a new import format. See [Compile and import hooks](#compile-and-import-hooks). | `compile` |
+| `serve` (exported) | Answer apps on this computer, such as an AI assistant speaking MCP: Prose listens on 127.0.0.1 and hands the plugin each message. See [Answering apps on this computer](#answering-apps-on-this-computer-mcp). | `serve` |
 | `decorations` | Highlights, underlines (straight or wavy), marks in the margin and hints after a line, over a document's text, in the writer's theme. Each plugin replaces or clears its own set per document; they move with edits and are never saved. | none |
 
 Prose calls three functions the plugin exports: `activate` (register commands), `run-command`, and `on-event` (for the events the plugin's `plugin.toml` lists: document opened, saved or changed, idle, timers and so on). A plugin may export more, for what only some plugins do: the `linter` world adds the `lint` interface (below), and Prose calls it only on a plugin that exports it.
@@ -32,6 +33,8 @@ Plugins never draw their own UI. They describe it, and Prose draws it in the wri
 ### Permissions
 
 A plugin asks for permissions in `plugin.toml`, and the writer grants them when installing it. Prose links only the interfaces a plugin was granted, so a plugin that imports `edits` without `edit-documents` (or `project` without `read-project`, or `binder` without `edit-binder`) doesn't load at all. No permission reaches git remotes, credentials, Prose's license, other plugins' data, `settings.toml` beyond the plugin's own table, or the shell: the API takes binder ids and revision ids, never paths. A component only imports the interfaces it actually calls, so a plugin that never edits doesn't need the permission.
+
+`serve` is shown to the writer as a warning, like a network site: an app the plugin answers, such as an AI assistant, may send what it reads to its company's servers.
 
 Plugins run in a sandbox: no files, no network, no clock beyond WASI's monotonic clock, and no other process. Prose stops a call that runs too long and turns off a plugin that keeps failing.
 
@@ -281,6 +284,7 @@ if let Some(picked) = picker.wait() {
 - [`examples/smart-quotes`](examples/smart-quotes): `:SmartQuotes` curls straight quotes in the selection or the whole document, as one undo step, and curls every compile's quotes as a compile transform. Needs `edit-documents` and `compile`.
 - [`examples/filter-words`](examples/filter-words): underlines filter words ("just", "really", "suddenly") and offers to cut them, leaving dialogue alone unless asked. Exports `lint`; the words are a setting.
 - [`examples/names`](examples/names): `:Name` streams 2,000 generated character names into a picker, each with its origin and a line of dialogue as its preview, and puts the chosen one at the caret. Needs `edit-documents`.
+- [`examples/mcp`](examples/mcp): an [MCP](https://modelcontextprotocol.io) server, so an AI assistant on the writer's computer (Claude Desktop, Claude Code, or any MCP client) can read the project (binder, documents, search, history, stats) and, unless the writer sets `read_only`, edit it: find and replace, rewrite, insert and remove paragraphs, add and retitle documents, set metadata, trash, replace across the project. Every change is one undo step in Prose. Needs `serve`, `read-project`, `edit-documents` and `edit-binder`. [Set it up](#answering-apps-on-this-computer-mcp).
 - [`examples/fountain`](examples/fountain): compiles the book to a [Fountain](https://fountain.io) screenplay and imports `.fountain` files, a document per top-level section. Needs `compile`.
 
 ### Compile and import hooks
@@ -304,6 +308,39 @@ prose_plugin::export!(Fountain, compile);
 
 None of them reach the disk: Prose reads and writes the files. Prose calls only what `plugin.toml` names (below), the plugin needs the `compile` permission, and Compile's progress and Cancel cover the calls.
 
+### Answering apps on this computer (MCP)
+
+A plugin can be a server for apps on the writer's computer by exporting the `serve` interface (the `server` world) and implementing [`Serve`](crates/prose-plugin/src/serve.rs):
+
+```rust
+impl Serve for Mcp {
+    fn handle(&mut self, message: &str) -> Option<String> {
+        // A JSON-RPC message in; the reply out, or None for a notification.
+    }
+}
+
+prose_plugin::export!(Mcp, serve);
+```
+
+```toml
+permissions = ["serve", "read-project"]
+port = 7767          # Prose listens on 127.0.0.1:7767; the writer can change it
+```
+
+The plugin never touches a socket. Prose listens on 127.0.0.1 only, while the plugin is on, speaking MCP's Streamable HTTP (`POST /mcp`, answered with JSON). It keeps a key for the plugin in `plugins/<id>/serve.toml`, beside the plugin's folder and out of its reach, and turns away any request without `Authorization: Bearer <key>`, any from a web page (one with an `Origin` header) and any addressed to another host name. Each message is queued like a command and runs under the command deadline, with the API the plugin's other permissions give; what it changes is one undo step.
+
+**Connecting an assistant to the MCP example.** Install it in Prose (build it, then `:PluginInstall` its folder, or a `.prose-plugin` zip of `plugin.toml` and `plugin.wasm`) and allow what it asks. Then point the assistant at Prose's own executable with `--mcp`, which passes messages between the assistant and the running Prose:
+
+- Claude Desktop, in `claude_desktop_config.json`:
+  ```json
+  {"mcpServers": {"prose": {"command": "C:\\Users\\you\\AppData\\Local\\Prose\\current\\prose.exe", "args": ["--mcp"]}}}
+  ```
+  (Prose's installer puts it in `%LOCALAPPDATA%\Prose\current`; on a Mac, use `"/Applications/Prose.app/Contents/MacOS/prose"`).
+- Claude Code: `claude mcp add prose -- "<path to prose>" --mcp`.
+- A client that speaks HTTP: the `url` in `plugins/mcp/serve.toml`, with its `key` as a bearer token.
+
+Prose must be running with a project open. In settings.toml, `[plugins.mcp] read_only = true` leaves the assistant only the tools that read, `open_in` says where a document it edits is opened (it edits through a pane, so you see each change and `u` undoes it), and `port` moves the server.
+
 ## plugin.toml
 
 ```toml
@@ -318,6 +355,7 @@ homepage = "https://example.com"   # optional
 permissions = []            # e.g. ["edit-documents"]
 events = []                 # e.g. ["document-saved", "idle", "timer"]
 # timer_seconds = 60        # with the "timer" event, at least 10
+# port = 7767               # with the "serve" permission: where Prose listens, 1024 or more
 
 [settings.min_length]       # one table per setting, shown on Prose's settings screen
 title = "Shortest word"     # optional

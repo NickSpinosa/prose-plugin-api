@@ -1,0 +1,28 @@
+package prose:plugin@0.1.0;
+
+/// Answering apps on this computer, such as an AI assistant talking the
+/// Model Context Protocol (MCP). A plugin offers it by exporting this
+/// interface (the `server` world; in the Rust SDK,
+/// `export!(T, serve)`), asking for the `serve` permission and naming a
+/// `port` in `plugin.toml`.
+///
+/// The plugin never touches a socket. Prose listens on 127.0.0.1 only, at
+/// the port `plugin.toml` names (the writer can change it in
+/// `settings.toml`), and only while the plugin is on. It turns away any
+/// request that doesn't carry the key Prose keeps for the plugin, and any
+/// that a web page sends, so only an app the writer set up can reach it.
+/// Each message it takes is handed to `handle`; what `handle` returns is
+/// the reply. Apps that speak over standard input and output instead reach
+/// it through `prose --mcp <plugin id>`, which passes each line along.
+///
+/// Messages are text, one whole message per call (for MCP, a JSON-RPC
+/// message or batch). Calls are queued with the plugin's commands and
+/// events and run one at a time, each under the command deadline (5 s by
+/// default), and see the same API a command does, without a current
+/// document. What the plugin changes is one undo step per message, as a
+/// command's is.
+interface serve {
+  /// Answer `message`. `none` for a message that takes no reply (a JSON-RPC
+  /// notification).
+  handle: func(message: string) -> option<string>;
+}

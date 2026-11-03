@@ -87,6 +87,22 @@ pub mod bindings {
             additional_derives: [PartialEq],
         });
     }
+
+    /// The `serve` export (answering apps on this computer), generated on
+    /// its own like `lint`: only a plugin exported with
+    /// [`export!`](crate::export)`(Type, serve)` has it, and the component
+    /// then targets the `server` world.
+    pub mod serve {
+        wit_bindgen::generate!({
+            path: "../../wit/v0.1.0",
+            inline: "package prose:sdk;\nworld serve-export { export prose:plugin/serve@0.1.0; }",
+            world: "prose:sdk/serve-export",
+            pub_export_macro: true,
+            export_macro_name: "__export_serve",
+            default_bindings_module: "::prose_plugin::bindings::serve",
+            runtime_path: "::prose_plugin::__private::wit_bindgen::rt",
+        });
+    }
 }
 
 pub mod binder;
@@ -97,6 +113,7 @@ mod document;
 pub mod history;
 mod lint;
 pub mod project;
+pub mod serve;
 pub mod settings;
 pub mod ui;
 pub mod workspace;
@@ -110,6 +127,7 @@ pub use command::{Argument, Command, RegisterError};
 pub use compile::Compile;
 pub use document::{Document, Edit, EditError, InvalidOp, new_id};
 pub use lint::{Diagnostic, DiagnosticKind, Lint};
+pub use serve::Serve;
 
 /// The version of the WIT package this crate is built against. A plugin's
 /// `plugin.toml` names it as `api`.
@@ -152,7 +170,9 @@ impl Context {
 /// `lint` too: `prose_plugin::export!(FilterWords, lint);`. A plugin with
 /// compile and import hooks implements [`Compile`] and passes `compile`:
 /// `prose_plugin::export!(Fountain, compile);`. One with both passes
-/// `lint, compile`.
+/// `lint, compile`. A plugin that answers apps on this computer implements
+/// [`Serve`] and passes `serve`, after any of the others:
+/// `prose_plugin::export!(Mcp, serve)` or `export!(T, lint, serve)`.
 #[macro_export]
 macro_rules! export {
     ($plugin:ty) => {
@@ -173,6 +193,48 @@ macro_rules! export {
             $crate::__prose_lint_export!();
             $crate::__prose_compile_export!();
         });
+    };
+    ($plugin:ty, serve) => {
+        $crate::__export_plugin!($plugin, {
+            $crate::__prose_serve_export!();
+        });
+    };
+    ($plugin:ty, lint, serve) => {
+        $crate::__export_plugin!($plugin, {
+            $crate::__prose_lint_export!();
+            $crate::__prose_serve_export!();
+        });
+    };
+    ($plugin:ty, compile, serve) => {
+        $crate::__export_plugin!($plugin, {
+            $crate::__prose_compile_export!();
+            $crate::__prose_serve_export!();
+        });
+    };
+    ($plugin:ty, lint, compile, serve) => {
+        $crate::__export_plugin!($plugin, {
+            $crate::__prose_lint_export!();
+            $crate::__prose_compile_export!();
+            $crate::__prose_serve_export!();
+        });
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __prose_serve_export {
+    () => {
+        struct __ProseServe;
+
+        impl $crate::bindings::serve::exports::prose::plugin::serve::Guest for __ProseServe {
+            fn handle(
+                message: ::std::string::String,
+            ) -> ::std::option::Option<::std::string::String> {
+                __PROSE_PLUGIN.with_borrow_mut(|p| $crate::Serve::handle(p, &message))
+            }
+        }
+
+        $crate::bindings::serve::__export_serve!(__ProseServe);
     };
 }
 

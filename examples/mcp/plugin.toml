@@ -1,0 +1,26 @@
+id = "mcp"
+name = "MCP"
+version = "0.1.0"
+api = "0.1.0"
+description = "Lets an AI assistant on this computer, such as Claude, read your project and, if you allow it, edit it, through the Model Context Protocol."
+authors = ["Prose"]
+license = "MIT OR Apache-2.0"
+# serve: Prose listens on 127.0.0.1 for MCP clients the writer sets up.
+# read-project: the binder, any document, search, history and stats.
+# edit-documents and edit-binder: the edit tools (off with read_only).
+permissions = ["serve", "read-project", "edit-documents", "edit-binder"]
+port = 7767
+events = []
+
+[settings.read_only]
+title = "Read only"
+kind = "boolean"
+default = false
+help = "Offer the assistant only the tools that read: it can't change your documents or binder."
+
+[settings.open_in]
+title = "Open documents to edit in"
+kind = "choice"
+options = ["active-pane", "split-right", "split-down"]
+default = "active-pane"
+help = "Where a document the assistant edits is opened when no pane shows it. Edits go through a pane, so you see them and u undoes each one."
