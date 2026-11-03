@@ -18,10 +18,11 @@ Prose's own source is not here. The WIT is the whole contract between Prose and 
 | `ui` | Status messages, notifications with buttons, text and choice prompts, a log. | none |
 | `settings` | The plugin's own `[plugins.<id>]` table from the writer's `settings.toml`. | none |
 | `workspace` | The open project's name, the documents open in panes and the active one, and opening a document in a pane or a split. | none |
+| `decorations` | Highlights, underlines (straight or wavy), marks in the margin and hints after a line, over a document's text, in the writer's theme. Each plugin replaces or clears its own set per document; they move with edits and are never saved. | none |
 
 Prose calls three functions the plugin exports: `activate` (register commands), `run-command`, and `on-event` (for the events the plugin's `plugin.toml` lists: document opened, saved or changed, idle, timers and so on).
 
-Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers, decorations over text, spelling and style checks, compile and import formats, panels, and reading the whole project.
+Plugins never draw their own UI. They describe it, and Prose draws it in the writer's theme, the same on desktop and phone. Later API versions add pickers, spelling and style checks, compile and import formats, panels, and reading the whole project.
 
 ### Permissions
 
@@ -97,9 +98,26 @@ doc.edit_with_retry(|doc, edit| {
 
 Ops apply in order, each to the document as the earlier ones left it, so when you make several changes in one block, go from its end to its start.
 
+Decorations mark up the text without changing it. Collect them and show them; each call replaces the plugin's decorations on that document:
+
+```rust
+use prose_plugin::decorations::{Color, Decorations};
+
+let mut marks = Decorations::new();
+for block in doc.blocks() {
+    for (at, _) in block.text.match_indices("suddenly") {
+        let span = Span::in_block(&block.id, at as u32, (at + 8) as u32);
+        marks.underline(span, Color::Warning, true);
+    }
+}
+marks.show(&doc).map_err(|e| e.to_string())?;
+```
+
+Like edits, they are placed against the version you read, and refused as stale if the writer typed since. They follow the writer's edits after that, and are gone when the document closes.
+
 ### Examples
 
-- [`examples/word-freq`](examples/word-freq): `:WordFreq [n]` lists the most used words in the document. Reads blocks and settings; needs no permissions.
+- [`examples/word-freq`](examples/word-freq): `:WordFreq [n]` lists the most used words in the document, `:WordFreqMark [n]` highlights every use of them with a mark in the margin, and `:WordFreqClear` takes the highlights away. Reads blocks and settings and decorates; needs no permissions.
 - [`examples/smart-quotes`](examples/smart-quotes): `:SmartQuotes` curls straight quotes in the selection or the whole document, as one undo step. Needs `edit-documents`.
 
 ## plugin.toml

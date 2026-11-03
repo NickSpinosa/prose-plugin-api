@@ -222,3 +222,56 @@ fn a_command_without_a_document_is_an_error() {
     );
     assert_eq!(r.unwrap(), Err("Open a document first".into()));
 }
+
+#[test]
+fn word_freq_marks_and_clears_the_top_word() {
+    use host_test::Decoration;
+    use host_test::prose::plugin::decorations::Color;
+
+    let prose = Prose {
+        doc: Doc::paragraphs(&[
+            "Stairs and more stairs.",
+            "Nothing here.",
+            "The stairs again.",
+        ]),
+        ..Prose::default()
+    };
+    let mut p = load(&wasm("word_freq"), Grants::default(), prose).unwrap();
+    p.run("mark_top", &[]).unwrap().unwrap();
+    assert_eq!(messages(&p), ["Marked stairs"]);
+
+    let marks = &p.prose().decorations["doc-1"];
+    let highlights: Vec<(String, u32, u32)> = marks
+        .iter()
+        .filter_map(|d| match d {
+            Decoration::Highlight(h) => {
+                assert_eq!(h.color, Color::Yellow);
+                Some((
+                    h.span.start.block.clone(),
+                    h.span.start.offset,
+                    h.span.end.offset,
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        highlights,
+        [
+            ("b0".to_string(), 0, 6),
+            ("b0".to_string(), 16, 22),
+            ("b2".to_string(), 4, 10),
+        ]
+    );
+    let margins: Vec<&str> = marks
+        .iter()
+        .filter_map(|d| match d {
+            Decoration::MarginMark(m) => Some(m.at.block.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(margins, ["b0", "b2"]);
+
+    p.run("clear_marks", &[]).unwrap().unwrap();
+    assert!(p.prose().decorations.is_empty());
+}

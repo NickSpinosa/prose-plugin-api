@@ -21,6 +21,7 @@ world plugin {
   import ui;
   import settings;
   import workspace;
+  import decorations;
 
   use types.{selection, span, op};
 

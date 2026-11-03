@@ -52,6 +52,7 @@ pub mod bindings {
 }
 
 mod command;
+pub mod decorations;
 mod document;
 pub mod settings;
 pub mod ui;

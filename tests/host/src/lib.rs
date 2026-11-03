@@ -19,9 +19,10 @@ wasmtime::component::bindgen!({
     imports: { default: trappable },
 });
 
+pub use prose::plugin::decorations::Decoration;
 pub use prose::plugin::types::{Block, BlockKind};
 pub use prose::plugin::ui::Level;
-use prose::plugin::{commands, documents, edits, settings, types, ui, workspace};
+use prose::plugin::{commands, decorations, documents, edits, settings, types, ui, workspace};
 
 /// A handle the plugin holds on the one fake document.
 pub struct DocHandle;
@@ -118,6 +119,9 @@ pub struct Prose {
     /// writer typed while the plugin worked.
     pub writer_types_once: bool,
     pub undo_steps: usize,
+    /// The plugin's decorations on each document, by id, as it last set
+    /// them.
+    pub decorations: HashMap<String, Vec<Decoration>>,
     pub next_id: u32,
     pub table: ResourceTable,
     pub wasi: WasiCtx,
@@ -311,6 +315,54 @@ impl settings::Host for Prose {
     }
 }
 
+impl decorations::Host for Prose {
+    fn set(
+        &mut self,
+        document: String,
+        version: u64,
+        list: Vec<Decoration>,
+    ) -> wasmtime::Result<std::result::Result<(), decorations::DecorationError>> {
+        if document != self.doc.id {
+            return Ok(Err(decorations::DecorationError::Gone));
+        }
+        if version != self.doc.version {
+            return Ok(Err(decorations::DecorationError::Stale));
+        }
+        for (index, decoration) in list.iter().enumerate() {
+            let (start, end) = match decoration {
+                Decoration::Highlight(d) => (&d.span.start, &d.span.end),
+                Decoration::Underline(d) => (&d.span.start, &d.span.end),
+                Decoration::MarginMark(d) => (&d.at, &d.at),
+                Decoration::Hint(d) => (&d.at, &d.at),
+            };
+            let fits = |p: &types::Position| {
+                self.doc
+                    .index(&p.block)
+                    .is_some_and(|i| self.doc.blocks[i].text.is_char_boundary(p.offset as usize))
+            };
+            if !fits(start) || !fits(end) {
+                return Ok(Err(decorations::DecorationError::Invalid(
+                    decorations::InvalidDecoration {
+                        index: index as u32,
+                        message: "not in the document".into(),
+                    },
+                )));
+            }
+        }
+        if list.is_empty() {
+            self.decorations.remove(&document);
+        } else {
+            self.decorations.insert(document, list);
+        }
+        Ok(Ok(()))
+    }
+
+    fn clear(&mut self, document: String) -> wasmtime::Result<()> {
+        self.decorations.remove(&document);
+        Ok(())
+    }
+}
+
 impl workspace::Host for Prose {
     fn project_name(&mut self) -> wasmtime::Result<Option<String>> {
         Ok(Some("The Lighthouse".into()))
@@ -363,6 +415,7 @@ pub fn load(wasm: &[u8], grants: Grants, prose: Prose) -> Result<Loaded> {
     ui::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     settings::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     workspace::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    decorations::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     if grants.edit_documents {
         edits::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     }
