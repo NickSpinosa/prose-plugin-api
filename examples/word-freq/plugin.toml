@@ -1,12 +1,12 @@
 id = "word-freq"
 name = "WordFreq"
-version = "0.1.0"
+version = "0.2.0"
 api = "0.1.0"
-description = "Lists the most used words in a document."
+description = "Lists the most used words in a document and fixes doubled words."
 authors = ["Prose"]
 license = "MIT OR Apache-2.0"
-# Reads only the document it is run on, so it needs no permissions.
-permissions = []
+# :WordFreqFix edits the document it is run on. :WordFreq only reads it.
+permissions = ["edit-documents"]
 events = []
 
 [settings.ignore]
@@ -28,3 +28,9 @@ default = 10
 min = 1
 max = 100
 help = "How many words to list when :WordFreq is run without a number."
+
+[settings.allow_doubled]
+title = "Words that may double"
+kind = "text-list"
+default = ["had", "that", "is"]
+help = "Words :WordFreqFix leaves doubled, like \"had had\"."

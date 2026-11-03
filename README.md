@@ -6,7 +6,7 @@ A Prose plugin is a WebAssembly component plus a `plugin.toml`. Because the API 
 
 Prose's own source is not here. The WIT is the whole contract between Prose and a plugin.
 
-> **Status:** API `0.1.0` is a draft. Prose doesn't load plugins yet; it will change until the first Prose release with plugin support, when it is tagged `v0.1.0` and frozen.
+> **Status:** API `0.1.0` is a draft. Prose's development builds load plugins; the API may still change until the first Prose release with plugin support, when it is tagged `v0.1.0` and frozen.
 
 ## What a plugin can do (0.1)
 
@@ -34,7 +34,11 @@ A plugin asks for permissions in `plugin.toml`, and the writer grants them when 
 
 Plugins run in a sandbox: no files, no network, no clock beyond WASI's monotonic clock, and no other process. Prose stops a call that runs too long and turns off a plugin that keeps failing.
 
-## Write a plugin in Rust
+## Writing a plugin
+
+This walks through a plugin from an empty folder to running it in Prose. It uses the Rust SDK; the steps after "Build it" are the same in any language.
+
+### 1. Set up
 
 You need Rust 1.90 or newer and the WebAssembly target:
 
@@ -42,16 +46,25 @@ You need Rust 1.90 or newer and the WebAssembly target:
 rustup target add wasm32-wasip2
 ```
 
-Start from the template with [cargo-generate](https://github.com/cargo-generate/cargo-generate):
+### 2. Start from the template
+
+With [cargo-generate](https://github.com/cargo-generate/cargo-generate):
 
 ```sh
 cargo install cargo-generate
 cargo generate --git https://github.com/NickSpinosa/prose-plugin-api template --name my-plugin
 cd my-plugin
-cargo build --release
 ```
 
-The template's `.cargo/config.toml` builds for `wasm32-wasip2`, so the plugin is `target/wasm32-wasip2/release/my_plugin.wasm`. To build without the template, add the SDK and make the crate a `cdylib`:
+It asks for the name writers see, the `:` name of its first command (a capital letter first, like `WordCount`) and a one-line description, and gives you:
+
+| File | What |
+|---|---|
+| `plugin.toml` | What Prose reads before it runs anything: id, name, version, permissions, events, settings ([below](#plugintoml)) |
+| `src/lib.rs` | The plugin: one command that says how many words the document has |
+| `.cargo/config.toml` | Builds for `wasm32-wasip2` |
+
+To start without the template, make a `cdylib` crate that depends on the SDK:
 
 ```toml
 [lib]
@@ -61,9 +74,9 @@ crate-type = ["cdylib"]
 prose-plugin = { git = "https://github.com/NickSpinosa/prose-plugin-api", branch = "main" }
 ```
 
-and build with `cargo build --release --target wasm32-wasip2`.
+### 3. Add commands
 
-A plugin is a type implementing `Plugin`:
+A plugin is a type implementing `Plugin`, exported with `export!`. Prose calls `activate` once when the plugin loads, where it registers its commands, and `run_command` when the writer runs one:
 
 ```rust
 use prose_plugin::{Command, Context, Plugin, ui};
@@ -87,7 +100,32 @@ impl Plugin for Hello {
 prose_plugin::export!(Hello);
 ```
 
-Edits are built against the version of the document you read. If the writer typed in between, Prose refuses the edit rather than guessing, and `Document::edit_with_retry` reads again and rebuilds it:
+A command has two names. `hello` is its id: writers bind keys to it in `keymap.toml` as `<plugin id>.hello`. `Hello` is what they type on the `:` line, and it must start with a capital letter so it never clashes with Prose's own commands. Add `.argument(Argument::Text)` for a command that takes words after it (`:WordFreq 20`), and `.suggested_keys("secondary-k secondary-w")` to offer keys, which Prose uses only when nothing else has them and the writer's `keymap.toml` always overrides. `cx.count` is the count typed before it in vim mode, if any.
+
+What `run_command` returns is what the writer sees: `Ok` shows nothing more, and `Err(text)` shows `text` as an error on the message line. Use `ui::info`, `ui::warn` and `ui::error` to say anything else, and `ui::confirm` to ask a yes-or-no question (the deadline below doesn't run while the writer thinks).
+
+### 4. Read the document
+
+`cx.document()` is the document the command was run on. `blocks()` reads it a page of blocks at a time, so a long book is never copied all at once:
+
+```rust
+let mut words = 0;
+for block in doc.blocks() {
+    words += block.text.split_whitespace().count();
+}
+```
+
+A block has an `id`, a `kind` (paragraph, heading, quote, …), its `text`, and the runs and annotations on it. Offsets are bytes into `text`; `doc.utf16_offset` and `doc.byte_offset` convert for languages that count UTF-16. `doc.selection_span()` is the selection, if there is one.
+
+### 5. Edit it
+
+Changing the text needs the `edit-documents` permission, so add it to `plugin.toml`:
+
+```toml
+permissions = ["edit-documents"]
+```
+
+Build ops against the version of the document you read, then apply them. Everything one command applies is one undo step, so `u` undoes the whole command. If the writer typed while your plugin worked, Prose refuses the edit rather than guessing; `edit_with_retry` reads again and calls your builder again:
 
 ```rust
 doc.edit_with_retry(|doc, edit| {
@@ -100,7 +138,71 @@ doc.edit_with_retry(|doc, edit| {
 .map_err(|e| e.to_string())?;
 ```
 
-Ops apply in order, each to the document as the earlier ones left it, so when you make several changes in one block, go from its end to its start.
+Ops apply in order, each to the document as the earlier ones left it, so when you make several changes in one block, go from its end to its start. An empty edit changes nothing and makes no undo step. [`examples/word-freq`](examples/word-freq)'s `:WordFreqFix` is a whole command built this way.
+
+### 6. Give it settings
+
+Declare each setting in `plugin.toml` with a kind and a default; Prose shows them on its settings screen and the writer sets them under `[plugins.<id>]` in `settings.toml`. Read them with `prose_plugin::settings`:
+
+```toml
+[settings.min_length]
+kind = "integer"
+default = 3
+min = 1
+help = "Words shorter than this are left out."
+```
+
+```rust
+let min = prose_plugin::settings::integer("min_length").unwrap_or(3);
+```
+
+Prose fills in your defaults, but keep a fallback in code: a test host may not.
+
+### 7. Build it
+
+```sh
+cargo build --release
+```
+
+The component is `target/wasm32-wasip2/release/my_plugin.wasm`. A release build of a small plugin is about 100 KB.
+
+### 8. Try it in Prose
+
+An installed plugin is a folder holding `plugin.toml` and the component renamed `plugin.wasm`. Make one and install it:
+
+```sh
+mkdir -p dist/my-plugin
+cp plugin.toml dist/my-plugin/
+cp target/wasm32-wasip2/release/my_plugin.wasm dist/my-plugin/plugin.wasm
+```
+
+then in Prose run `:PluginInstall /path/to/dist/my-plugin` (or Settings > Plugins > Install from File… with the folder zipped as `my-plugin.prose-plugin`). Prose checks the manifest and the component's imports, asks the writer for any permissions, copies the folder into `plugins/my-plugin/` beside `settings.toml`, and turns it on. Your commands are then on the `:` line, in the command palette (the Plugins menu) and in the Shortcuts settings.
+
+After a rebuild, run `:PluginInstall` again: Prose sees the new `plugin.wasm` and reloads the plugin without a restart. `:PluginDisable my-plugin` turns it off and `:PluginRemove my-plugin` deletes it.
+
+### 9. Test it without Prose
+
+Keep the logic in plain functions and unit-test them with `cargo test` on your own machine; only the calls into Prose need the component. To run the component itself, copy [`tests/host`](tests/host): a fake Prose on Wasmtime that loads a `.wasm`, gives it a document and settings, runs commands and records what it said, what it changed and how many undo steps it made. This repository's own tests (`tests/host/tests/examples.rs`) run every example that way.
+
+### 10. Know the limits
+
+Prose runs each plugin on its own thread, in a sandbox:
+
+- **Time**: a command or `activate` may run 5 s, an event or a lint call 50 ms. A call that runs longer is stopped, and the plugin is restarted (activated again).
+- **Memory**: 64 MB over all of the plugin's memories.
+- **Crashes**: a panic, a trap or an overrun is a crash; the writer sees "<name> crashed (…) and was restarted". After three, the plugin is off until Prose restarts. An `Err` from `run_command` is not a crash.
+- **Nothing else**: no files (unless granted `files`, and then only its own `data` folder), no network, no processes, no environment. Standard output and errors go to Prose's log, not the screen, so show what the writer needs with `ui`.
+
+Prose's own costs are small: loading a plugin the first time compiles it (well under 100 ms for one this size), later loads come from a compile cache (under 10 ms), and a command's round trip is under 5 ms plus your plugin's own work.
+
+### 11. Share it
+
+- **A file**: zip the folder (`plugin.toml` and `plugin.wasm`) and rename it `<id>.prose-plugin`.
+- **A git repository**: commit `plugin.toml` and the built `plugin.wasm` at the top of the repository on a release tag (`v1.0.0`). Writers install it with `:PluginInstall github.com/you/my-plugin` and update it with `:PluginUpdate`, which takes your newest release tag.
+
+Bump `version` in `plugin.toml` with every release, and keep `api` at the WIT version you built against.
+
+## More the API can do
 
 ### Checking text
 
@@ -134,7 +236,7 @@ Ranges are byte offsets into the paragraph; an empty suggestion deletes the rang
 
 ### Examples
 
-- [`examples/word-freq`](examples/word-freq): `:WordFreq [n]` lists the most used words in the document. Reads blocks and settings; needs no permissions.
+- [`examples/word-freq`](examples/word-freq): `:WordFreq [n]` lists the most used words in the document, and `:WordFreqFix` deletes doubled words ("the the") as one undo step, leaving the ones in its `allow_doubled` setting ("had had"). Needs `edit-documents`.
 - [`examples/smart-quotes`](examples/smart-quotes): `:SmartQuotes` curls straight quotes in the selection or the whole document, as one undo step, and curls every compile's quotes as a compile transform. Needs `edit-documents` and `compile`.
 - [`examples/filter-words`](examples/filter-words): underlines filter words ("just", "really", "suddenly") and offers to cut them, leaving dialogue alone unless asked. Exports `lint`; the words are a setting.
 - [`examples/fountain`](examples/fountain): compiles the book to a [Fountain](https://fountain.io) screenplay and imports `.fountain` files, a document per top-level section. Needs `compile`.
@@ -211,7 +313,7 @@ A `choice` setting lists its `options = [...]`. `grants` and `lint` are Prose's 
 enabled = ["word-freq"]
 
 [plugins.word-freq]
-grants = []
+grants = ["edit-documents"]
 min_length = 4
 
 [plugins.filter-words]
